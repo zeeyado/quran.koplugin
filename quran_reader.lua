@@ -25,7 +25,7 @@ local function notifyInfo(text)
 end
 
 -- ---------------------------------------------------------------------
--- Pure helpers (tested in scripts/dev_checks/check_plugin_helpers.lua)
+-- Pure helpers (tested in dev/check_plugin_helpers.lua)
 -- ---------------------------------------------------------------------
 
 --- Step one ayah in Hafs space with surah rollover.

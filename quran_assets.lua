@@ -30,7 +30,7 @@ local TEST_BASE = "https://github.com/zeeyado/quran-ebook/releases/download/test
 local M = {}
 
 -- ---------------------------------------------------------------------
--- Pure helpers (unit-tested in scripts/dev_checks/check_plugin_helpers.lua)
+-- Pure helpers (unit-tested in dev/check_plugin_helpers.lua)
 -- ---------------------------------------------------------------------
 
 -- Release versions are "MAJOR.MINOR" (package_release.py grammar); numeric

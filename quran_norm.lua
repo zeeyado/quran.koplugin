@@ -4,7 +4,7 @@ Arabic/Latin search-text normalizer — the Lua half of the norm() contract
 (kb/export/quran_text_extract.py, which builds text-vN.sqlite's FTS
 columns). The two implementations MUST transform text identically: the
 extract normalizes what gets indexed, this module normalizes what gets
-queried. Parity is locked by scripts/dev_checks/norm_fixture.lua
+queried. Parity is locked by dev/norm_fixture.lua
 (regenerated with every extract run) — never change one side alone; bump
 norm_version on BOTH sides and rebuild/re-ship the text package when the
 mapping changes.

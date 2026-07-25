@@ -26,7 +26,7 @@ local M = {}
 M.SCHEMA_VERSION = "1"
 
 -- ---------------------------------------------------------------------
--- Pure helpers (unit-tested in scripts/dev_checks/check_plugin_helpers.lua)
+-- Pure helpers (unit-tested in dev/check_plugin_helpers.lua)
 -- ---------------------------------------------------------------------
 
 -- Word-dict entries carry "root: \u{200E}ع-ذ-ب" (build_dictionary.py,
