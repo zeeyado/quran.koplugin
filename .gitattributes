@@ -1,0 +1,6 @@
+# Keep the GitHub zipball lean: appstore.koplugin installs the repo
+# archive as the plugin folder, so only runtime files should ship.
+/dev export-ignore
+/.github export-ignore
+/.gitattributes export-ignore
+/.gitignore export-ignore

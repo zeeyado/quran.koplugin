@@ -1,22 +1,22 @@
 local _ = require("gettext")
 return {
     name = "quran",
-    version = "1.10",
+    version = "0.1.0",
     fullname = _("Quran Helper"),
     description = _([[
-Quran reading companion for KOReader.
+Quran companion plugin for KOReader (early beta).
 
+Designed around the Quran EPUB library from the quran-ebook project.
 Features:
-- Per-instance word dictionary: automatically filters dictionary results
-  to show the entry matching the current ayah position
-- Grammar dictionary lookup: long-press ayah numbers for word-by-word
-  grammar analysis (requires Quran grammar StarDict dictionary)
-- Surah overview lookup: long-press surah name headers for introductory
-  text about each surah (requires Surah Overview StarDict dictionary)
-- Tafsir lookup: long-press ayah numbers for tafsir commentary
-  (requires Quran tafsir StarDict dictionaries)
-- Juz status bar: shows current juz (and boundary transitions) in the
-  footer while reading
-- Dictionary rendering fix: normalizes QPC tanween codepoints for correct
-  display in dictionary popup headers]]),
+- Explorer: surah/juz library browser with per-ayah navigation,
+  search, and reading-position restore
+- Ayah card and quick panel: tap an ayah marker for translation,
+  tafsir, word-by-word grammar, and cross-references
+- Tafsir reader with multi-edition switching
+- Per-instance word dictionary filtering and grammar/surah-overview
+  lookups (StarDict packages)
+- Roots browser (Lane), similar-ayah and thematic connections,
+  phrase-occurrence views (QUL data packages)
+- Juz/hizb-aware header and footer, Hafs/Warsh-aware numbering
+- In-app downloads for books, dictionaries, and data packages]]),
 }

@@ -1,0 +1,30 @@
+name: checks
+
+on: [push, pull_request]
+
+jobs:
+  parse-and-harness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install LuaJIT
+        run: sudo apt-get update && sudo apt-get install -y luajit
+
+      - name: Parse all Lua sources
+        run: |
+          status=0
+          for f in *.lua dev/*.lua; do
+            luajit -e "assert(loadfile('$f'))" || { echo "parse FAIL: $f"; status=1; }
+          done
+          exit $status
+
+      # Runs the full helper harness on stock LuaJIT. KOReader-native
+      # sections (sqlite binding, CREngine) and real-db round trips
+      # self-skip when their prerequisites are absent; the pass line is
+      # still authoritative for everything that ran.
+      - name: Helper harness
+        run: |
+          set -o pipefail
+          luajit dev/check_plugin_helpers.lua | tee harness.log
+          tail -1 harness.log | grep -q "ALL HELPER TESTS PASS"
