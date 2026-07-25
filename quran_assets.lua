@@ -1,9 +1,12 @@
 --[[--
 quran_assets.lua — v1.12 hub: Library & assets (the asset manager).
 
-Fetches two manifests from the GitHub release assets:
-  dicts.json    (scripts/package_release.py — plugin + dictionary ZIPs)
-  catalog.json  (scripts/gen_catalog.py — the released EPUB variants)
+Fetches two manifests from GitHub release assets:
+  dicts.json    (quran-ebook scripts/package_release.py: plugin +
+                 dictionary/data ZIPs; hosted on THIS repo's rolling
+                 "assets" bucket since the 2026-07 repo split)
+  catalog.json  (quran-ebook scripts/gen_catalog.py: the released EPUB
+                 variants; hosted on quran-ebook's releases)
 and drives the install/update screens inside the Quran browser.
 
 Download + extract follow KOReader's own in-box dictionary downloader
@@ -14,8 +17,9 @@ against the manifest before anything is moved into place. Book identity
 follows the catalog contract: variant id = filename stem, with
 old_filename as the pre-sweep fallback.
 
-Asset source: "official" (releases/latest/download) or "test" (the
-rolling test-build pre-release — unvalidated CI builds, for beta
+Asset source: "official" (the two split homes below) or "test" (the
+rolling test-build pre-release on quran-ebook, a SINGLE full-parity
+bucket for books and assets alike: unvalidated CI builds, for beta
 testing; a pre-release can never be `latest`, so it needs an explicit
 switch). Manifests embed absolute official URLs, so every fetched URL
 is re-based through M.resolveUrl. GPL-3.0.
@@ -24,7 +28,13 @@ is re-based through M.resolveUrl. GPL-3.0.
 local logger = require("logger")
 local _ = require("gettext")
 
-local OFFICIAL_BASE = "https://github.com/zeeyado/quran-ebook/releases/latest/download"
+-- Post-split homes (2026-07): books release from quran-ebook; dict/data
+-- packages and the plugin itself release from THIS repo's rolling
+-- "assets" bucket (populated at the first beta packaging; until then
+-- official-mode fetches 404 exactly as they did pre-split, when no zip
+-- was ever a release asset).
+local OFFICIAL_BOOKS_BASE = "https://github.com/zeeyado/quran-ebook/releases/latest/download"
+local OFFICIAL_DICTS_BASE = "https://github.com/zeeyado/quran.koplugin/releases/download/assets"
 local TEST_BASE = "https://github.com/zeeyado/quran-ebook/releases/download/test-build"
 
 local M = {}
@@ -263,14 +273,19 @@ local function askRestart(text)
 end
 
 -- Prepare a URL for the active asset source: trim stray whitespace and
--- newlines (input dialogs and hand-edited manifests carry them — a
+-- newlines (input dialogs and hand-edited manifests carry them; a
 -- trailing newline makes GitHub answer 400 Bad Request), and in "test"
--- mode re-base official-release URLs onto the test-build pre-release
--- (dicts.json/catalog.json embed absolute releases/latest paths).
+-- mode re-base EITHER official home onto the test-build pre-release
+-- (manifests embed absolute official paths; test-build is one bucket).
 function M.resolveUrl(url, source)
     url = tostring(url or ""):match("^%s*(.-)%s*$")
-    if source == "test" and url:sub(1, #OFFICIAL_BASE) == OFFICIAL_BASE then
-        url = TEST_BASE .. url:sub(#OFFICIAL_BASE + 1)
+    if source == "test" then
+        for _i, base in ipairs({ OFFICIAL_BOOKS_BASE, OFFICIAL_DICTS_BASE }) do
+            if url:sub(1, #base) == base then
+                url = TEST_BASE .. url:sub(#base + 1)
+                break
+            end
+        end
     end
     return url
 end
@@ -513,8 +528,13 @@ function M.setAssetSource(src)
     M._manifest, M._catalog = nil, nil
 end
 
-local function assetBase()
-    return M.assetSource() == "test" and TEST_BASE or OFFICIAL_BASE
+-- Per-manifest official homes (test mode is one bucket for both)
+local function booksBase()
+    return M.assetSource() == "test" and TEST_BASE or OFFICIAL_BOOKS_BASE
+end
+
+local function dictsBase()
+    return M.assetSource() == "test" and TEST_BASE or OFFICIAL_DICTS_BASE
 end
 
 -- kind: "dicts" | "data"
@@ -718,12 +738,12 @@ local function ensureFetched(cache_key, url, label, cb, force)
 end
 
 local function ensureManifest(cb)
-    ensureFetched("_manifest", assetBase() .. "/dicts.json", _("Fetching dictionary catalog…"), cb)
+    ensureFetched("_manifest", dictsBase() .. "/dicts.json", _("Fetching dictionary catalog…"), cb)
 end
 
 -- force=true bypasses both caches for a fresh check (the update checker).
 local function ensureCatalog(cb, force)
-    ensureFetched("_catalog", assetBase() .. "/catalog.json", _("Fetching book catalog…"), cb, force)
+    ensureFetched("_catalog", booksBase() .. "/catalog.json", _("Fetching book catalog…"), cb, force)
 end
 
 -- ---------------------------------------------------------------------

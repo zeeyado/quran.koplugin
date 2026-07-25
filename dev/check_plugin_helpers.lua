@@ -841,19 +841,36 @@ eq(QAS.versionNewer("1.1", nil), true, "assets: any version newer than unknown")
 eq(QAS.versionNewer(nil, "1.0"), false, "assets: nil candidate never newer")
 
 -- resolveUrl: whitespace trim + test-mode re-base (every fetch routes
--- through this — manifests embed absolute releases/latest URLs)
+-- through this; manifests embed absolute official URLs, which since the
+-- repo split live in TWO homes: books on quran-ebook releases, dict/data
+-- assets on the quran.koplugin "assets" bucket; test-build is ONE bucket)
 do
     local OB = "https://github.com/zeeyado/quran-ebook/releases/latest/download"
+    local DB = "https://github.com/zeeyado/quran.koplugin/releases/download/assets"
     local TB = "https://github.com/zeeyado/quran-ebook/releases/download/test-build"
     eq(QAS.resolveUrl(OB .. "/catalog.json", "official"), OB .. "/catalog.json",
-        "assets: official source leaves release URLs alone")
+        "assets: official source leaves book URLs alone")
+    eq(QAS.resolveUrl(DB .. "/dicts.json", "official"), DB .. "/dicts.json",
+        "assets: official source leaves dict-bucket URLs alone")
     eq(QAS.resolveUrl(OB .. "/catalog.json\n", "official"), OB .. "/catalog.json",
         "assets: trailing newline trimmed (GitHub answers 400 to it)")
     eq(QAS.resolveUrl("  " .. OB .. "/x.zip \n", "test"), TB .. "/x.zip",
-        "assets: test source re-bases latest URLs onto test-build")
+        "assets: test source re-bases book URLs onto test-build")
+    eq(QAS.resolveUrl(DB .. "/quran_irab_v1.4.zip", "test"),
+        TB .. "/quran_irab_v1.4.zip",
+        "assets: test source re-bases dict-bucket URLs onto test-build")
     eq(QAS.resolveUrl("https://example.org/a.epub", "test"), "https://example.org/a.epub",
         "assets: test source leaves foreign URLs alone")
     eq(QAS.resolveUrl(nil, "official"), "", "assets: nil url -> empty string")
+end
+
+-- source pins: each manifest fetches from its own official home
+do
+    local asrc = io.open(PLUGIN_DIR .. "/quran_assets.lua"):read("*a")
+    eq(asrc:find('"_manifest", dictsBase() .. "/dicts.json"', 1, true) ~= nil,
+        true, "assets: dicts.json fetches from the dict bucket")
+    eq(asrc:find('"_catalog", booksBase() .. "/catalog.json"', 1, true) ~= nil,
+        true, "assets: catalog.json fetches from the books home")
 end
 
 local merged = QAS.mergeDictState(
