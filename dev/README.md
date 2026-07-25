@@ -1,7 +1,7 @@
 # Dev tooling
 
 Everything in `dev/` is excluded from the GitHub zipball via
-`.gitattributes export-ignore` — only the plugin's runtime files ship.
+`.gitattributes export-ignore`: only the plugin's runtime files ship.
 
 ## Helper harness
 
@@ -30,7 +30,7 @@ Path resolution (all auto-detected, override via env):
 | `KOREADER_DIR` | `/Applications/KOReader.app/Contents/koreader` | sqlite binding + CREngine for the real-document tests (skip when absent) |
 
 Full run on the reference setup: 1360 tests. Stock-luajit run without
-KOReader/data: ~944 tests + skips — still authoritative for everything
+KOReader/data: ~944 tests + skips, still authoritative for everything
 that ran.
 
 CI (`.github/workflows/check.yml`) parse-checks every Lua file and runs
@@ -38,13 +38,13 @@ the harness on stock LuaJIT.
 
 ## Headless screenshots (macOS)
 
-KOReader can screenshot itself — no screen-recording permission needed.
+KOReader can screenshot itself, so no screen-recording permission is needed.
 `dev/patches/2-quran-shot.lua` is a KOReader
 [userpatch](https://github.com/koreader/koreader/wiki/User-patches),
 env-gated on `KO_MECHTEST`, that opens a plugin surface and captures it.
 
 ```zsh
-KOHOME=/tmp/kohome            # isolated profile — never your real one
+KOHOME=/tmp/kohome            # isolated profile, never your real one
 mkdir -p $KOHOME/patches $KOHOME/plugins
 ln -sfn "$(pwd)" $KOHOME/plugins/quran.koplugin
 cp dev/patches/2-quran-shot.lua $KOHOME/patches/
@@ -59,7 +59,7 @@ KO_HOME=$KOHOME KO_MECHTEST=1 KO_MECHTEST_MODE=panel \
 Modes: `panel · card · browser · themes · themeflow · uap · phrases ·
 similar · surahhub`. Gotchas: the book path must be **absolute** (a
 relative path silently opens the file manager); the first run of a fresh
-KO_HOME shows a one-time color-rendering popup — run twice and use the
+KO_HOME shows a one-time color-rendering popup: run twice and use the
 second shot.
 
 ## Release / packaging
@@ -68,5 +68,5 @@ None yet (beta). Asset packages (dicts, data) are built by quran-ebook's
 `tools/` and published to this repo's asset bucket. When the first
 packaged release is cut: add the updates-manager fields (`update_url` +
 version) to `_meta.lua`, and only then add the `koreader-plugin` GitHub
-topic (it makes the repo discoverable/installable via appstore.koplugin —
+topic (it makes the repo discoverable/installable via appstore.koplugin;
 that is the "promoted" switch).

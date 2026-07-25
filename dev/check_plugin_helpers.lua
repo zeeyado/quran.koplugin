@@ -1486,7 +1486,7 @@ local root_menu = _shown
 root_menu.onLeftButtonTap()
 local ctx = _shown
 eq(ctx ~= root_menu, true, "r3-f21: tap opens a context menu, not paging")
-eq(ctx.buttons[1][1].text, "Quran Helper settings",
+eq(ctx.buttons[1][1].text, "Quran settings",
     "r3-f21: settings row leads the hamburger")
 eq(ctx.buttons[2][1].text:find("Paging direction", 1, true), 1,
     "r3-f21: paging direction is one labeled row")

@@ -1,4 +1,4 @@
---- Quran Helper plugin for KOReader.
+--- Quran plugin for KOReader.
 --
 -- Features:
 --   1. Grammar dictionary lookup: intercepts long-press on ayah number markers
@@ -46,7 +46,7 @@ local _ = require("gettext")
 
 local Quran = WidgetContainer:extend{
     name = "quran",
-    pretty_name = "Quran Helper",
+    pretty_name = "Quran",
 }
 
 -- UTF-8 character iterator pattern (start byte + continuation bytes).
@@ -2337,7 +2337,7 @@ function Quran:onWordLookup(args)
 end
 
 --- Standalone plugin settings menu (owner ask 2026-07-16; koassistant
--- a8bfa3c idiom): the Quran Helper menu opened directly as its own
+-- a8bfa3c idiom): the Quran menu opened directly as its own
 -- TouchMenu, built from the same addToMainMenu items — NOT by crawling
 -- KOReader's main menu (menu_order overrides, slow devices, and menu
 -- refactors made crawling silently no-op in koassistant's previous
@@ -4639,7 +4639,7 @@ function Quran:addToMainMenu(menu_items)
     -- after construction).
     local bookless = not (self.ui and self.ui.document)
     menu_items.quran = {
-        text = _("Quran Helper"),
+        text = _("Quran"),
         sorting_hint = "tools",
         sub_item_table = {
             -- Launchers (also gesture-assignable; the quick-panel row drops

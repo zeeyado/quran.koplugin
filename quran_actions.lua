@@ -893,7 +893,7 @@ function M._panelRegistry(quran)
                     if q.showSettingsMenu then q:showSettingsMenu() end
                 end),
                 hold_callback = function()
-                    H.notifyWarn(_("All Quran Helper settings — same menu as the top menu bar entry."))
+                    H.notifyWarn(_("All Quran settings, same menu as the top menu bar entry."))
                 end }
         end }
 

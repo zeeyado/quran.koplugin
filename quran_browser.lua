@@ -1274,7 +1274,7 @@ function M.show(quran, actions, land)
             local rows = {}
             if q and q.showSettingsMenu then
                 rows[#rows + 1] = {{
-                    text = _("Quran Helper settings"),
+                    text = _("Quran settings"),
                     align = "left",
                     callback = function()
                         UIManager:close(dialog)
