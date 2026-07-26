@@ -692,13 +692,16 @@ function M.show(spec)
         live:init(true)
         wireScroll(live, spec)
         M.wireTouchPaging(live)
-        if live.frame and live.frame.dimen then
-            -- "ui" (non-flashing region refresh), not stock reinit's
-            -- "partial": navigation steps flashed the whole frame incl.
-            -- the button row (owner 2026-07-17 polish note); KOReader's
-            -- periodic full refresh clears any e-ink ghosting
-            UIManager:setDirty("all", "ui", live.frame.dimen)
-        end
+        -- ALWAYS request the repaint, with NO region: a rebuilt frame
+        -- has no dimen until its first paint, so the old dimen guard
+        -- skipped this entirely and the step never got its own
+        -- refresh. SDL masked it; on e-ink the next tap repainted the
+        -- framebuffer but visibly refreshed only its own region (text
+        -- area / button rect), leaving the titlebar and the Open row
+        -- stale on screen (owner device, 2026-07-26). Nil region =
+        -- full-screen "ui" refresh, non-flashing, and the surface IS
+        -- full-screen.
+        UIManager:setDirty("all", "ui")
         return live
     end
 

@@ -556,8 +556,12 @@ function Browser:showAyahPage(surah, hafs_ayah, opts)
     self:navigateForward(title, items)
 end
 
--- Current position lands on the unified ayah page for the first visible
--- ayah, titled with the full visible range (design D4 / issue 3).
+-- Current position lands on the SURAH page (owner 2026-07-26 round 6:
+-- "you are in a range of ayahs typically on a given page... shouldn't
+-- the current position be the surah?"), with the visible range
+-- promoted as the first row so the exact position stays one tap away
+-- (it opens the old landing: the unified ayah page titled with the
+-- range, design D4 / issue 3).
 function Browser:showPosition()
     local quran, actions = self.quran, self.actions
     local surah, first, last
@@ -568,9 +572,9 @@ function Browser:showPosition()
         notifyWarn(_("Could not determine the current position."))
         return
     end
+    local sub_items, sub_title = self:buildSurahItems(surah)
     if not first then
-        -- anchorless (pre-v0.11) book: surah-level page
-        local sub_items, sub_title = self:buildSurahItems(surah)
+        -- anchorless (pre-v0.11) book: surah-level page, no range row
         self:navigateForward(sub_title, sub_items)
         return
     end
@@ -580,7 +584,23 @@ function Browser:showPosition()
         and quran:_warshToHafs(surah, first) or first
     local hafs_last = quran._warshToHafs
         and quran:_warshToHafs(surah, last) or last
-    self:showAyahPage(surah, hafs_first, { range = { hafs_first, hafs_last } })
+    local pos_label
+    if hafs_last and hafs_last > hafs_first then
+        pos_label = string.format("%s %d:%d\226\128\147%d",
+            _("On this page:"), surah, hafs_first, hafs_last)
+    else
+        pos_label = string.format("%s %d:%d",
+            _("On this page:"), surah, hafs_first)
+    end
+    table.insert(sub_items, 1, {
+        text = pos_label,
+        separator = true,
+        callback = function()
+            self:showAyahPage(surah, hafs_first,
+                { range = { hafs_first, hafs_last } })
+        end,
+    })
+    self:navigateForward(sub_title, sub_items)
 end
 
 function Browser:showAyahList(surah)

@@ -1020,11 +1020,12 @@ function M.showEntry(browser, entry_id, root, nav)
         viewer.page_turn_callback_next = navigateNext
         viewer:init(true)
         wireScroll()
-        if viewer.frame and viewer.frame.dimen then
-            -- "ui" not "partial": same navigation-polish rationale as
-            -- the Reader's in-place update (quran_reader M.show)
-            UIManager:setDirty("all", "ui", viewer.frame.dimen)
-        end
+        -- ALWAYS request the repaint, no region: a rebuilt frame has
+        -- no dimen until its first paint, so the old dimen guard
+        -- skipped this and the step never got its own e-ink refresh
+        -- (same stale-title bug as quran_reader M.show, owner device
+        -- 2026-07-26). Nil region = full-screen "ui" refresh.
+        UIManager:setDirty("all", "ui")
         return
     end
 

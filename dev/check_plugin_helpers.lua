@@ -753,9 +753,16 @@ QB.show(bq, QA)  -- fresh instance
 _shown.item_table[4].callback()  -- Juz
 eq(_shown.switch_log[1].n, 30, "browser: juz list has 30 items")
 QB.show(bq, QA)
-_shown.item_table[1].callback()  -- Current position → unified ayah page
+_shown.item_table[1].callback()  -- Current position → SURAH page (round 6)
+local sur_items = _shown.item_table
+eq(_shown.title, "Surah77", "uap: position lands on the surah page")
+eq(sur_items[1].text, "On this page: 77:33",
+    "uap: visible range promoted as the first row")
+eq(sur_items[1].separator, true, "uap: range row banded from the hub")
+eq(sur_items[2].text, "Go to surah", "uap: surah hub rows follow")
+sur_items[1].callback()          -- the range row opens the old landing
 local pos_items = _shown.item_table
-eq(_shown.title, "Surah77 77:33", "uap: position lands on the ayah page")
+eq(_shown.title, "Surah77 77:33", "uap: range row opens the unified ayah page")
 eq(pos_items[1].text, "Translations", "uap: Translations row first (D-R3-3)")
 eq(pos_items[2].text, "Go to this ayah in the book", "uap: goto row")
 eq(pos_items[2].separator, true,
@@ -793,7 +800,8 @@ local bq_jump = {
 }
 bq_jump.ui.document.getCurrentPage = function() return 580 end
 QB.show(bq_jump, QA_start)
-_shown.item_table[1].callback()          -- ayah page (range loop logs too)
+_shown.item_table[1].callback()          -- surah page (round 6)
+_shown.item_table[1].callback()          -- range row → ayah page
 jump_log = {}
 _shown.item_table[2].callback()          -- Go to this ayah
 eq(jump_log[1], "77:33", "uap-goto: start-anchored book resolves anchor A")
@@ -805,7 +813,8 @@ local QA_end = setmetatable({
     end,
 }, { __index = QA })
 QB.show(bq_jump, QA_end)
-_shown.item_table[1].callback()
+_shown.item_table[1].callback()          -- surah page (round 6)
+_shown.item_table[1].callback()          -- range row → ayah page
 jump_log = {}
 _shown.item_table[2].callback()
 eq(jump_log[1], "77:32", "uap-goto: end-anchored book resolves anchor A-1")
@@ -890,6 +899,47 @@ do
         "scan-scope: no open-book-dir fold")
     eq(fib:find("readhistory"), nil,
         "scan-scope: history stays out of install detection")
+end
+
+-- source pins: round-6 owner defects (2026-07-26)
+do
+    -- (a) in-place viewer updates MUST request their own repaint,
+    -- unguarded: a rebuilt frame has no dimen until its first paint,
+    -- so any `if frame.dimen` guard skips the refresh and e-ink keeps
+    -- the old titlebar/buttons on screen (the stale-title device bug)
+    local rsrc = io.open(PLUGIN_DIR .. "/quran_reader.lua"):read("*a")
+    local rlive = rsrc:match("live:init%(true%).-return live")
+    eq(rlive ~= nil, true, "repaint: reader live-update sliced")
+    eq(rlive:find('UIManager:setDirty("all", "ui")', 1, true) ~= nil, true,
+        "repaint: reader step always sets dirty, full-screen ui")
+    eq(rlive:find("frame.dimen", 1, true), nil,
+        "repaint: reader step has no dimen guard")
+    local xsrc = io.open(PLUGIN_DIR .. "/quran_roots.lua"):read("*a")
+    local xlive = xsrc:match("viewer:init%(true%).-return")
+    eq(xlive ~= nil, true, "repaint: roots live-update sliced")
+    eq(xlive:find('UIManager:setDirty("all", "ui")', 1, true) ~= nil, true,
+        "repaint: roots step always sets dirty, full-screen ui")
+    eq(xlive:find("frame.dimen", 1, true), nil,
+        "repaint: roots step has no dimen guard")
+    -- (b) the meaning-pair evidence call site and its export must
+    -- agree (the evidence silently skipped while morphConn was local)
+    local msrc = io.open(PLUGIN_DIR .. "/quran_masaq.lua"):read("*a")
+    eq(msrc:find("M.morphConn = morphConn", 1, true) ~= nil, true,
+        "morph-export: morphConn exported from quran_masaq")
+    local qsrc = io.open(PLUGIN_DIR .. "/quran_qul.lua"):read("*a")
+    eq(qsrc:find("masaq.morphConn", 1, true) ~= nil, true,
+        "morph-export: pair view rides the exported connection")
+    -- (c) Current position lands on the SURAH page with the visible
+    -- range promoted as the first row (owner round 6)
+    local bsrc = io.open(PLUGIN_DIR .. "/quran_browser.lua"):read("*a")
+    local spos = bsrc:match("function Browser:showPosition%(%).-\nend")
+    eq(spos ~= nil, true, "position: showPosition sliced")
+    eq(spos:find("buildSurahItems", 1, true) ~= nil, true,
+        "position: lands on the surah page")
+    eq(spos:find('_("On this page:")', 1, true) ~= nil, true,
+        "position: visible range promoted as a row")
+    eq(spos:find("table.insert(sub_items, 1", 1, true) ~= nil, true,
+        "position: the range row is FIRST")
 end
 
 local merged = QAS.mergeDictState(
@@ -2882,7 +2932,8 @@ if have_db and sq3_ok then
     -- Entry viewer: X-ray-style ◀ ▶ navigation through the headword list
     package.preload["ui/widget/textviewer"] = function()
         return { new = function(_, spec)
-            -- in-place updates call viewer:init(true) + read frame.dimen
+            -- in-place updates call viewer:init(true) then setDirty
+            -- unconditionally (round-6 repaint fix)
             spec.init = function() end
             spec.frame = { dimen = {} }
             return spec
@@ -3138,6 +3189,12 @@ do
         "qul: markWords multiple runs")
     eq(QQ.markWords("a b", { { 5, 9 } }), "a b", "qul: markWords skips bad runs")
     eq(QQ.markWords("a b", nil), "a b", "qul: markWords nil runs passthrough")
+    -- bold mode (the PTF pair views): bold ALONE, no brackets (owner
+    -- 2026-07-26 round 6: with real bold the bookends are clutter)
+    eq(QQ.markWords("a b c d e", { { 2, 3 } }, true), "a \239\191\178b c\239\191\179 d e",
+        "qul: markWords bold mode = PTF only, no brackets")
+    eq(QQ.markWords("a b c", { { 1, 1 } }, true), "\239\191\178a\239\191\179 b c",
+        "qul: markWords bold single word")
     eq(QQ.contextWindow("w1 w2 w3 w4 w5 w6 w7 w8 w9 w10", 5, 6, 2),
         "… w3 w4 ﴿w5 w6﴾ w7 w8 …", "qul: contextWindow pads + ellipses")
     eq(QQ.contextWindow("w1 w2 w3", 1, 2, 3), "﴿w1 w2﴾ w3",
@@ -3163,22 +3220,26 @@ do
     eq(spc.title, "2:255 ↔ 42:4 · 3/12",
         "pair-spec: list position rides the title")
     local spm = QQ.similarPairSpec{
-        kind = "meaning", score = 2,
+        kind = "meaning", score = 2, common_roots = 3,
         shared_roots = { "ش-ي-أ", "ذ-ه-ب" },
         a = { surah = 14, ayah = 19 }, b = { surah = 4, ayah = 133 },
     }
     eq(spm.text:find("Shared roots: ش-ي-أ · ذ-ه-ب", 1, true) ~= nil, true,
         "pair-spec: meaning evidence line lists the roots")
+    eq(spm.text:find("shared roots", 1, true), nil,
+        "pair-spec: evidence owns the count (no stored-count double line)")
     eq(sp.text:find("Matched wording · 69% · 10 matched words", 1, true) ~= nil,
         true, "pair-spec: meta leads with % and word count")
     eq(sp.text:find("(20% of 2:255 · 34% of 42:4)", 1, true) ~= nil, true,
         "pair-spec: per-side coverage")
-    eq(sp.text:find("Matched wording is marked ﴿ ﴾", 1, true) ~= nil, true,
-        "pair-spec: marks legend when runs exist")
-    eq(sp.text:find("￲﴿t1 t2﴾￳ t3", 1, true) ~= nil, true,
-        "pair-spec: a-side run marked")
-    eq(sp.text:find("u1 ￲﴿u2 u3 u4﴾￳", 1, true) ~= nil, true,
-        "pair-spec: b-side run marked")
+    eq(sp.text:find("Matched wording is in bold.", 1, true) ~= nil, true,
+        "pair-spec: bold legend when runs exist")
+    eq(sp.text:find("￲t1 t2￳ t3", 1, true) ~= nil, true,
+        "pair-spec: a-side run bold, no brackets")
+    eq(sp.text:find("u1 ￲u2 u3 u4￳", 1, true) ~= nil, true,
+        "pair-spec: b-side run bold, no brackets")
+    eq(sp.text:find("\239\180\191", 1, true), nil,
+        "pair-spec: no ornate brackets anywhere in the PTF surface")
     eq(sp.text:find("￲Al-Baqarah 2:255￳", 1, true) ~= nil, true,
         "pair-spec: locus headers bold")
     eq(sp.text:find("TA", 1, true) ~= nil, true,
@@ -3200,12 +3261,12 @@ do
     eq(sp3.title, "2:3 ↔ 8:3", "pair-spec: phrase pair titled bare")
     eq(sp3.text:find("Repeated phrase ×4", 1, true) ~= nil, true,
         "pair-spec: phrase meta = ×count")
-    eq(sp3.text:find("The phrase is marked ﴿ ﴾", 1, true) ~= nil, true,
-        "pair-spec: phrase marks legend")
-    eq(sp3.text:find("￲﴿x1 x2﴾￳ x3 x4", 1, true) ~= nil, true,
-        "pair-spec: phrase a-side marked")
-    eq(sp3.text:find("y1 ￲﴿y2 y3﴾￳", 1, true) ~= nil, true,
-        "pair-spec: phrase b-side marked")
+    eq(sp3.text:find("The repeated phrase is in bold.", 1, true) ~= nil, true,
+        "pair-spec: phrase bold legend")
+    eq(sp3.text:find("￲x1 x2￳ x3 x4", 1, true) ~= nil, true,
+        "pair-spec: phrase a-side bold, no brackets")
+    eq(sp3.text:find("y1 ￲y2 y3￳", 1, true) ~= nil, true,
+        "pair-spec: phrase b-side bold, no brackets")
 end
 
 -- quran_qul: real-DB round trip (skipped when the build or sqlite missing)
@@ -3356,7 +3417,8 @@ if have_qul and sq3_ok then
         end }
     end
     QB.show(bq, QA)
-    _shown.item_table[1].callback()  -- Current position → unified ayah page
+    _shown.item_table[1].callback()  -- Current position → surah page (round 6)
+    _shown.item_table[1].callback()  -- range row → unified ayah page
     local pos2 = _shown.item_table
     eq(#pos2, 10, "qul-uap: 6 base items + all 4 conn rows (R3-F19: zero-count rows dimmed, not hidden)")
     local rows_by_text = {}
@@ -4995,8 +5057,10 @@ if have_qul and sq3_ok then
             "dense-sim: pair view titled with both loci")
         eq(simspec.text:find("Matched wording · 80%", 1, true) ~= nil, true,
             "dense-sim: similarity % leads the meta line")
-        eq(simspec.text:find("﴿", 1, true) ~= nil, true,
-            "dense-sim: marked overlap in the pair text")
+        eq(simspec.text:find("\239\191\178", 1, true) ~= nil, true,
+            "dense-sim: bold-marked overlap in the pair text")
+        eq(simspec.text:find("﴿", 1, true), nil,
+            "dense-sim: no bracket marks in the PTF pair text")
         eq(#simspec.extra_buttons, 2, "dense-sim: two Open buttons")
         uap_route = nil
         simspec.extra_buttons[2].callback()
@@ -5037,8 +5101,8 @@ if have_qul and sq3_ok then
             "dense-phr: occurrence tap opens the comparison pair view")
         eq(simspec.title:find("↔", 1, true) ~= nil, true,
             "dense-phr: pair view titled with the bare pair")
-        eq(simspec.text:find("﴿", 1, true) ~= nil, true,
-            "dense-phr: the phrase marked in the pair text")
+        eq(simspec.text:find("\239\191\178", 1, true) ~= nil, true,
+            "dense-phr: the phrase bold-marked in the pair text")
         uap_route = nil
         simspec.extra_buttons[2].callback()
         eq(uap_route ~= nil, true,
@@ -5607,7 +5671,8 @@ do
     eq(gram_root ~= nil, true,
         "r3-grammar: Grammar row in the Language group (D-R3-7a → R4 groups)")
     QB.show(bq, QA)
-    _shown.item_table[1].callback()  -- Current position → ayah page
+    _shown.item_table[1].callback()  -- Current position → surah page (round 6)
+    _shown.item_table[1].callback()  -- range row → ayah page
     local gram_row
     for _i, it in ipairs(_shown.item_table) do
         if it.text == "Grammar" then gram_row = it end

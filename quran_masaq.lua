@@ -289,6 +289,11 @@ local function morphConn(quran)
     M._morph_conn = conn or false
     return conn
 end
+-- Exported: the meaning-pair shared-root evidence (quran_qul's pair
+-- view) rides the same cached connection. It called M.morphConn from
+-- day one, but the function was local-only, so the evidence silently
+-- skipped everywhere (owner repro 2026-07-26).
+M.morphConn = morphConn
 
 local function rows(conn, sql, bind)
     local out = {}

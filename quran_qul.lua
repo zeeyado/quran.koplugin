@@ -462,13 +462,13 @@ function M.sliceWords(text, from, to)
     return table.concat(words, " ", from, to)
 end
 
---- Pure: mark 1-based [from,to] word runs with ornate ﴿…﴾ — the
--- shared-wording inline highlight (D-R3-14 display half; TextViewer
--- has no rich text, so the marks ARE the highlight). The Quranic
--- quotation brackets replaced «…» on owner feedback 2026-07-26 ("the
--- quotation markers are not enough"): they are large, unmistakable,
--- and present in the Arabic UI fonts. Out-of-range runs are skipped;
--- the text is otherwise unchanged.
+--- Pure: mark 1-based [from,to] word runs — the shared-wording inline
+-- highlight (D-R3-14 display half). Two marks, by surface: bold=true
+-- (the PTF pair views) uses REAL bold and nothing else; plain
+-- surfaces (Menu list rows render no PTF) get the Quranic quotation
+-- brackets ﴿…﴾, which replaced «…» on owner feedback 2026-07-26
+-- ("the quotation markers are not enough"). Out-of-range runs are
+-- skipped; the text is otherwise unchanged.
 function M.markWords(text, runs, bold)
     if not (runs and #runs > 0) then return text end
     local words = {}
@@ -476,12 +476,17 @@ function M.markWords(text, runs, bold)
     for _i, r in ipairs(runs) do
         local a, b = r[1], r[2]
         if a and b and a >= 1 and b <= #words and a <= b then
-            -- bold (PTF) wraps OUTSIDE the brackets; the marks survive
-            -- surfaces with no PTF rendering, the bold carries the
-            -- weight where there is one (owner 2026-07-26: "markers
-            -- are not very readable" alone)
-            words[a] = (bold and PTF_B or "") .. "\239\180\191" .. words[a]
-            words[b] = words[b] .. "\239\180\190" .. (bold and PTF_E or "")
+            -- PTF surfaces (the pair views) mark with bold ALONE —
+            -- with real bold the brackets are redundant clutter (owner
+            -- 2026-07-26 round 6). The ﴿…﴾ marks remain for plain-text
+            -- surfaces (Menu list rows render no PTF).
+            if bold then
+                words[a] = PTF_B .. words[a]
+                words[b] = words[b] .. PTF_E
+            else
+                words[a] = "\239\180\191" .. words[a]
+                words[b] = words[b] .. "\239\180\190"
+            end
         end
     end
     return table.concat(words, " ")
@@ -857,23 +862,24 @@ function M.similarPairSpec(d)
     if d.kind == "meaning" then
         meta = _("Related in meaning") .. " · QurSim"
             .. ((d.score or 1) >= 2 and (" · " .. _("strong")) or "")
-        if d.common_roots and d.common_roots > 0 then
-            meta = meta .. " · " .. d.common_roots .. " "
-                .. _("shared roots")
-        end
         -- the evidence line (owner 2026-07-26: "what is meant to be
         -- similar?"): the roots themselves, computed from morphology
-        -- when installed; their words are ﴿…﴾-marked in both ayahs
+        -- when installed; their words are bolded in both ayahs. When
+        -- present it OWNS the count (QurSim's stored common_roots can
+        -- disagree with the live intersection; never show both).
         if d.shared_roots and #d.shared_roots > 0 then
             meta = meta .. "\n" .. _("Shared roots:") .. " "
                 .. table.concat(d.shared_roots, " · ")
+        elseif d.common_roots and d.common_roots > 0 then
+            meta = meta .. " · " .. d.common_roots .. " "
+                .. _("shared roots")
         end
     elseif d.kind == "phrase" then
         -- mutashabihat comparison (owner 2026-07-18: occurrences
         -- should compare "more directly", like the similar pair view)
         meta = string.format("%s ×%d", _("Repeated phrase"), d.count or 0)
         if (d.a_runs and #d.a_runs > 0) or (d.b_runs and #d.b_runs > 0) then
-            meta = meta .. "\n" .. _("The phrase is marked \239\180\191 \239\180\190")
+            meta = meta .. "\n" .. _("The repeated phrase is in bold.")
         end
     else
         -- "matched", not "shared": QUL's matcher tolerates inflection
@@ -897,7 +903,7 @@ function M.similarPairSpec(d)
             meta = meta .. " (" .. table.concat(cov, " · ") .. ")"
         end
         if (d.a_runs and #d.a_runs > 0) or (d.b_runs and #d.b_runs > 0) then
-            meta = meta .. "\n" .. _("Matched wording is marked \239\180\191 \239\180\190")
+            meta = meta .. "\n" .. _("Matched wording is in bold.")
         end
     end
     -- PTF surface (the themes-flow renderer path): bold loci, bold
