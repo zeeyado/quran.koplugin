@@ -3679,11 +3679,37 @@ eq(rw:find("مبتدأ", 1, true) ~= nil, true, "masaq: legend Arabic rendered")
 eq(rw:find("CC BY-NC", 1, true) ~= nil, true,
     "masaq: NC attribution line carried on every word view")
 
+-- ND-3 vocalized-surface helpers (pure): MASAQ's own forms are
+-- harakat-free; display overlays the real KFGQPC surface
+local sw = QMQ.splitAyahWords("\219\158 \216\165\217\144\217\134 xx")
+eq(#sw, 1, "masaq-voc: ۞ and non-Arabic tokens dropped from the split")
+eq(sw[1], "\216\165\217\144\217\134", "masaq-voc: word tokens kept verbatim")
+local vw = {
+    { word_id = 1001001, surface = "باسم" },
+    { word_id = 1001002, surface = "الله", word_id_end = 1001003 },
+    { word_id = 1001004, surface = "bare" },
+}
+QMQ.applyVocalized(vw, { [1001001] = "بِسۡمِ",
+    [1001002] = "V2", [1001003] = "V3" })
+eq(vw[1].surface, "بِسۡمِ", "masaq-voc: vocalized overlay wins")
+eq(vw[2].surface, "V2 V3", "masaq-voc: merged span joins covered members")
+eq(vw[3].surface, "bare", "masaq-voc: uncovered word keeps the fallback")
+local vw2 = { { word_id = 1, surface = "ab", word_id_end = 2 } }
+QMQ.applyVocalized(vw2, { [1] = "A" })   -- member 2 uncovered
+eq(vw2[1].surface, "ab", "masaq-voc: half-covered span keeps the fallback")
+eq(QMQ.lastWordPos({ { word_id = 1001001 },
+    { word_id = 1001002, word_id_end = 1001005 } }), 5,
+    "masaq-voc: alignment guard = last MASAQ word position (span end counts)")
+
 local mq_db = DATA_ROOT .. "/data/masaq-v1.sqlite"
 local have_mq = io.open(mq_db)
 if have_mq then have_mq:close() end
+local morph_db = DATA_ROOT .. "/data/morphology-v1.sqlite"
+local have_morph = io.open(morph_db)
+if have_morph then have_morph:close() end
 if have_mq and sq3_ok then
     fake_fs = { [DATA_DIR] = "directory", [mq_db] = "file" }
+    if have_morph then fake_fs[morph_db] = "file" end
     eq(QMQ.findDb({ path = DATA_DIR }), mq_db, "masaq-db: findDb via plugin dir")
     local mconn, merr = QMQ.openPath(mq_db)
     eq(mconn ~= nil, true, "masaq-db: opens with schema check (" .. tostring(merr) .. ")")
@@ -3713,7 +3739,8 @@ if have_mq and sq3_ok then
     eq(swc[1], 29, "masaq-browse: Fatihah distinct-word total")
     eq(swc[114] ~= nil, true, "masaq-browse: coverage reaches surah 114")
 
-    -- screen: word list for an ayah (rows = pos. surface — gloss)
+    -- screen: word list for an ayah (rows = pos. surface · gloss;
+    -- surfaces VOCALIZED from morphology when installed, ND-3)
     local mnav_t, mnav_i, mnav_o
     local mqb = {
         quran = { path = DATA_DIR,
@@ -3731,6 +3758,11 @@ if have_mq and sq3_ok then
     eq(mnav_o and mnav_o.multiline, true, "masaq-screens: two-line rows")
     eq(type(mnav_i[1].mandatory), "string",
         "masaq-screens: role in the count column")
+    if have_morph then
+        -- بِسۡمِ carries kasra (D9 90); the bare MASAQ concatenation has none
+        eq(mnav_i[1].text:find("\217\144") ~= nil, true,
+            "masaq-screens: rows vocalized via morphology form_text (ND-3)")
+    end
     QMQ.showSurah(mqb, 1)
     eq(#mnav_i, 7, "masaq-screens: surah screen lists covered ayahs")
     eq(mnav_i[1].text, "1:1", "masaq-screens: ayah rows keyed S:A")
@@ -3751,13 +3783,13 @@ if have_mq and sq3_ok then
     }
     QMQ.openWord(mq_quran, 1001004)
     eq(mspec ~= nil and mspec.kind, "masaq", "masaq-open: Reader kind")
-    eq(mspec.title:find("— 1:1", 1, true) ~= nil, true,
-        "masaq-open: title carries the locus")
+    eq(mspec.title:find("\194\183 1:1", 1, true) ~= nil, true,
+        "masaq-open: title carries the locus (dot join, no em dash)")
     eq(mspec.back_label, nil, "masaq-open: plain close (no browser beneath)")
     eq(mspec.text:find("MASAQ", 1, true) ~= nil, true,
         "masaq-open: NC attribution carried")
     QMQ.openWord(mq_quran, 2144016)
-    eq(mspec.title:find("— 2:144", 1, true) ~= nil, true,
+    eq(mspec.title:find("\194\183 2:144", 1, true) ~= nil, true,
         "masaq-open: span-covered word_id resolves")
     eq(mspec.title:find("حيث", 1, true) ~= nil, true,
         "masaq-open: merged-unit surface recovered from grouped tokens")

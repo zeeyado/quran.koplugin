@@ -61,6 +61,41 @@ function M.assembleWords(tokens)
     return out
 end
 
+--- Space-split an ayah's text into WORD tokens, dropping mark-only
+-- tokens (۞/۩ stand alone in the KFGQPC text but are no word — they
+-- carry no \216/\217-lead Arabic letter byte). Pure (ND-3).
+function M.splitAyahWords(text)
+    local words = {}
+    for tok in tostring(text or ""):gmatch("%S+") do
+        if tok:find("[\216\217]") then table.insert(words, tok) end
+    end
+    return words
+end
+
+--- Overlay vocalized surfaces onto assembled words (pure, ND-3): the
+-- map wins per word; a merged-unit span joins its member words but only
+-- when EVERY member is covered (a half-vocalized join would mislead);
+-- misses keep the concatenated segment-form fallback.
+function M.applyVocalized(words, vmap)
+    for _i, w in ipairs(words) do
+        if w.word_id_end and w.word_id_end > w.word_id then
+            local bits, all = {}, true
+            for id = w.word_id, w.word_id_end do
+                if vmap[id] then
+                    bits[#bits + 1] = vmap[id]
+                else
+                    all = false
+                    break
+                end
+            end
+            if all and #bits > 0 then w.surface = table.concat(bits, " ") end
+        elseif vmap[w.word_id] then
+            w.surface = vmap[w.word_id]
+        end
+    end
+    return words
+end
+
 -- Viewer text (PTF bold segments, the Lane/topic idiom)
 local PTF_HEADER = "\u{FFF1}"
 local PTF_B = "\u{FFF2}"
@@ -79,7 +114,7 @@ local function segmentText(t, legend)
         local bits = {}
         if e.ar and e.ar ~= "" then table.insert(bits, e.ar) end
         if e.en and e.en ~= "" then table.insert(bits, e.en) end
-        return table.concat(bits, " — ")
+        return table.concat(bits, " · ")
     end
     local head
     if t.morph_type == "Other_i3rab" then
@@ -138,7 +173,7 @@ function M.renderWord(tokens, legend, surface)
         table.insert(parts, segmentText(t, legend))
     end
     table.insert(parts, PTF_B .. _("Source:") .. PTF_E .. " "
-        .. _("MASAQ (Sawalha et al., CC BY-NC 3.0) — research-candidate data"))
+        .. _("MASAQ (Sawalha et al., CC BY-NC 3.0) · research-candidate data"))
     return PTF_HEADER .. table.concat(parts, "\n\n")
 end
 
@@ -187,7 +222,7 @@ function M.openPath(path)
     end)
     if not ver_ok or ver ~= M.SCHEMA_VERSION then
         pcall(function() conn:close() end)
-        return nil, _("MASAQ database has an unsupported format — update the plugin or the data package.")
+        return nil, _("MASAQ database has an unsupported format. Update the plugin or the data package.")
     end
     M._conn = conn
     M._db_path = path
@@ -198,9 +233,61 @@ end
 function M.ensureDb(quran)
     local path = M._db_path or M.findDb(quran)
     if not path then
-        return nil, _("MASAQ data package not installed — get it from Library & assets in the Quran Explorer.")
+        return nil, _("MASAQ data package not installed. Get it from Library & assets in the Quran Explorer.")
     end
     return M.openPath(path)
+end
+
+-- ---------------------------------------------------------------------
+-- ND-3 (owner 2026-07-26): vocalized surfaces. MASAQ's own segment
+-- forms are HARAKAT-FREE (bare stems/affixes: كذب + ت), so any surface
+-- concatenated from them reads unvocalized. Word-level display overlays
+-- the real KFGQPC Hafs surface at view time from two OPTIONAL sources:
+-- (1) the morphology package's occurrence.form_text (exact word_id key,
+-- root-bearing words) · (2) the text package's ayah text, space-split
+-- with mark-only tokens (۞) dropped, position → word_id — GUARDED per
+-- ayah: used only when the filtered token count equals MASAQ's own word
+-- count (7 known divergent ayahs skip it; verified corpus-wide against
+-- masaq-v1 2026-07-26). Segment rows keep MASAQ's bare forms: that IS
+-- the segmentation analysis. Neither package installed = the old
+-- concatenated fallback.
+-- ---------------------------------------------------------------------
+
+function M.findMorphDb(quran)
+    local lfs = require("libs/libkoreader-lfs")
+    local dirs = {}
+    local ok, DataStorage = pcall(require, "datastorage")
+    if ok then
+        table.insert(dirs, DataStorage:getDataDir() .. "/data/quran")
+    end
+    if quran and quran.path then
+        table.insert(dirs, quran.path)
+    end
+    for _i, dir in ipairs(dirs) do
+        if lfs.attributes(dir, "mode") == "directory" then
+            for entry in lfs.dir(dir) do
+                if entry:match("^morphology%-v%d+%.sqlite$") then
+                    return dir .. "/" .. entry
+                end
+            end
+        end
+    end
+end
+
+-- Cached read-only morphology connection; false = probed and absent.
+local function morphConn(quran)
+    if M._morph_conn ~= nil then return M._morph_conn or nil end
+    local conn
+    local path = M.findMorphDb(quran)
+    if path then
+        local ok, SQ3 = pcall(require, "lua-ljsqlite3/init")
+        if ok then
+            local okc, c = pcall(SQ3.open, path, "ro")
+            conn = okc and c or nil
+        end
+    end
+    M._morph_conn = conn or false
+    return conn
 end
 
 local function rows(conn, sql, bind)
@@ -248,6 +335,53 @@ function M.tokensForWord(conn, word_id)
         table.insert(out, tokenRow(r))
     end
     return out
+end
+
+-- The ayah's KFGQPC Hafs text via the text package (nil without it).
+-- MASAQ keys are Hafs-spine, so hafs is correct whatever the open book.
+local function textAyah(quran, surah, ayah)
+    local txt = quran and quran._textModule and quran:_textModule()
+    if not (txt and txt.ensureDb and txt.ayah) then return nil end
+    local conn = txt.ensureDb(quran)
+    if not conn then return nil end
+    local row = txt.ayah(conn, "hafs", surah, ayah)
+    return row and row.text
+end
+
+--- word_id -> vocalized surface for one ayah (ND-3): morphology
+-- form_text first (exact key), the guarded text split filling the
+-- gaps. expected_words = MASAQ's own word count for the ayah (the
+-- per-ayah alignment guard). {} when neither package is present.
+function M.vocalizedMap(quran, surah, ayah, expected_words)
+    local map = {}
+    local base = surah * 1e6 + ayah * 1e3
+    local conn = morphConn(quran)
+    if conn then
+        for _i, r in ipairs(rows(conn, [[
+            SELECT DISTINCT word_id, form_text FROM occurrence
+            WHERE word_id BETWEEN ? AND ? AND form_text IS NOT NULL]],
+            { base, base + 999 })) do
+            map[tonumber(r[1])] = r[2]
+        end
+    end
+    local toks = M.splitAyahWords(textAyah(quran, surah, ayah))
+    if expected_words and expected_words > 0 and #toks == expected_words then
+        for w = 1, #toks do
+            if not map[base + w] then map[base + w] = toks[w] end
+        end
+    end
+    return map
+end
+
+--- The alignment guard's expectation: the last word position MASAQ
+-- itself records for the assembled words (pure).
+function M.lastWordPos(words)
+    local last = 0
+    for _i, w in ipairs(words) do
+        local top = (w.word_id_end or w.word_id) % 1000
+        if top > last then last = top end
+    end
+    return last
 end
 
 --- All of an ayah's token rows, reading order.
@@ -327,13 +461,17 @@ function M.showAyah(browser, surah, ayah)
         return
     end
     local legend = M.legend(conn)
+    -- ND-3: vocalized surfaces overlaid at display time (segment rows
+    -- keep MASAQ's own bare forms)
     local words = M.assembleWords(tokens)
+    M.applyVocalized(words,
+        M.vocalizedMap(browser.quran, surah, ayah, M.lastWordPos(words)))
     local items = {}
     for _i, w in ipairs(words) do
         local word = w
         local text = w.pos .. ". " .. w.surface
         if w.gloss and w.gloss ~= "" then
-            text = text .. " — " .. w.gloss
+            text = text .. " · " .. w.gloss
         end
         local role = w.role and legend.role and legend.role[w.role]
         table.insert(items, {
@@ -403,9 +541,14 @@ local function wordView(quran, word_id, surface, back_label)
         notifyWarn(_("No word grammar recorded for this word."))
         return
     end
+    local s, a = math.floor(word_id / 1e6), math.floor(word_id / 1e3) % 1000
     if not surface or surface == "" then
         surface = ""
+        -- ND-3: recover the surface vocalized (fall back to the
+        -- concatenated segment forms when no package covers it)
         local words = M.assembleWords(tokens)
+        M.applyVocalized(words,
+            M.vocalizedMap(quran, s, a, M.lastWordPos(words)))
         for _i, gw in ipairs(words) do
             if gw.word_id == word_id then
                 surface = gw.surface
@@ -417,10 +560,9 @@ local function wordView(quran, word_id, surface, back_label)
     end
     local reader = quran._readerModule and quran:_readerModule()
     if not (reader and reader.show) then return end
-    local s, a = math.floor(word_id / 1e6), math.floor(word_id / 1e3) % 1000
     reader.show{
         kind = "masaq",
-        title = string.format("%s — %d:%d", surface ~= "" and surface
+        title = string.format("%s · %d:%d", surface ~= "" and surface
             or _("Word grammar"), s, a),
         text = M.renderWord(tokens, M.legend(conn), surface),
         back_label = back_label,
