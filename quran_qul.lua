@@ -469,18 +469,123 @@ end
 -- quotation markers are not enough"): they are large, unmistakable,
 -- and present in the Arabic UI fonts. Out-of-range runs are skipped;
 -- the text is otherwise unchanged.
-function M.markWords(text, runs)
+function M.markWords(text, runs, bold)
     if not (runs and #runs > 0) then return text end
     local words = {}
     for w in text:gmatch("%S+") do words[#words + 1] = w end
     for _i, r in ipairs(runs) do
         local a, b = r[1], r[2]
         if a and b and a >= 1 and b <= #words and a <= b then
-            words[a] = "\239\180\191" .. words[a]
-            words[b] = words[b] .. "\239\180\190"
+            -- bold (PTF) wraps OUTSIDE the brackets; the marks survive
+            -- surfaces with no PTF rendering, the bold carries the
+            -- weight where there is one (owner 2026-07-26: "markers
+            -- are not very readable" alone)
+            words[a] = (bold and PTF_B or "") .. "\239\180\191" .. words[a]
+            words[b] = words[b] .. "\239\180\190" .. (bold and PTF_E or "")
         end
     end
     return table.concat(words, " ")
+end
+
+--- Pure: word_pos (the QPC word axis morphology keys) -> raw
+-- space-split token index of `text`. The axes differ only on the 199
+-- ayahs where ۞ stands as its own token (the ND-3 finding), so marks
+-- computed on the word axis land on the right rendered token.
+function M.wordAxisMap(text)
+    local map, i, k = {}, 0, 0
+    for tok in text:gmatch("%S+") do
+        i = i + 1
+        if tok:find("[\216\217]") then
+            k = k + 1
+            map[k] = i
+        end
+    end
+    return map
+end
+
+-- sorted positions -> merged {from,to} runs (adjacents fuse, so a
+-- shared-root cluster gets ONE bracket pair, not one per word)
+local function runsFrom(positions)
+    table.sort(positions)
+    local runs = {}
+    for _i, p in ipairs(positions) do
+        local last = runs[#runs]
+        if last and p == last[2] + 1 then
+            last[2] = p
+        elseif not last or p > last[2] then
+            table.insert(runs, { p, p })
+        end
+    end
+    return runs
+end
+
+-- "عذب" -> "ع-ذ-ب" (the root-explorer display idiom)
+local function dashJoin(root)
+    local out = {}
+    for ch in tostring(root or ""):gmatch("[\194-\244][\128-\191]*") do
+        out[#out + 1] = ch
+    end
+    return table.concat(out, "-")
+end
+
+-- word_pos -> { root, ... } for one ayah (morphology-v1; a word can
+-- carry several roots on compound analyses)
+local function ayahRootMap(mconn, s, a)
+    local base = s * 1000000 + a * 1000
+    local by_pos = {}
+    for _i, r in ipairs(rows(mconn, [[
+        SELECT word_id, root FROM occurrence
+        WHERE word_id BETWEEN ? AND ?]], { base + 1, base + 999 })) do
+        local w = tonumber(r[1]) % 1000
+        by_pos[w] = by_pos[w] or {}
+        table.insert(by_pos[w], r[2])
+    end
+    return by_pos
+end
+
+--- The EVIDENCE for a meaning pair (owner 2026-07-26: "what is meant
+-- to be similar?"): the roots the two ayahs share, plus per-side word
+-- runs (raw token axis) so the sharing words can be marked in place.
+-- Returns nil when nothing is shared or morphology is absent.
+function M.sharedRootEvidence(mconn, a_s, a_a, b_s, b_a, a_text, b_text)
+    local a_pos = ayahRootMap(mconn, a_s, a_a)
+    local b_pos = ayahRootMap(mconn, b_s, b_a)
+    local a_set, b_set = {}, {}
+    for _w, roots in pairs(a_pos) do
+        for _i, r in ipairs(roots) do a_set[r] = true end
+    end
+    for _w, roots in pairs(b_pos) do
+        for _i, r in ipairs(roots) do b_set[r] = true end
+    end
+    local shared, shared_list = {}, {}
+    for r in pairs(a_set) do
+        if b_set[r] then
+            shared[r] = true
+            table.insert(shared_list, r)
+        end
+    end
+    if #shared_list == 0 then return nil end
+    table.sort(shared_list)
+    local function sideRuns(pos_map, text)
+        if not text then return nil end
+        local axis = M.wordAxisMap(text)
+        local hits = {}
+        for w, roots in pairs(pos_map) do
+            for _i, r in ipairs(roots) do
+                if shared[r] and axis[w] then
+                    table.insert(hits, axis[w])
+                    break
+                end
+            end
+        end
+        if #hits == 0 then return nil end
+        return runsFrom(hits)
+    end
+    local names = {}
+    for _i, r in ipairs(shared_list) do
+        names[#names + 1] = dashJoin(r)
+    end
+    return names, sideRuns(a_pos, a_text), sideRuns(b_pos, b_text)
 end
 
 --- Pure: a windowed extract around [from,to] — pad words of context
@@ -756,6 +861,13 @@ function M.similarPairSpec(d)
             meta = meta .. " · " .. d.common_roots .. " "
                 .. _("shared roots")
         end
+        -- the evidence line (owner 2026-07-26: "what is meant to be
+        -- similar?"): the roots themselves, computed from morphology
+        -- when installed; their words are ﴿…﴾-marked in both ayahs
+        if d.shared_roots and #d.shared_roots > 0 then
+            meta = meta .. "\n" .. _("Shared roots:") .. " "
+                .. table.concat(d.shared_roots, " · ")
+        end
     elseif d.kind == "phrase" then
         -- mutashabihat comparison (owner 2026-07-18: occurrences
         -- should compare "more directly", like the similar pair view)
@@ -788,17 +900,25 @@ function M.similarPairSpec(d)
             meta = meta .. "\n" .. _("Matched wording is marked \239\180\191 \239\180\190")
         end
     end
+    -- PTF surface (the themes-flow renderer path): bold loci, bold
+    -- marked runs (owner 2026-07-26: brackets alone "not very
+    -- readable"; kind names dropped from the title, the content
+    -- already says what it is)
     local function section(x, runs)
-        local parts = { locus(x) }
-        if x.text then parts[#parts + 1] = M.markWords(x.text, runs) end
+        local parts = { PTF_B .. locus(x) .. PTF_E }
+        if x.text then parts[#parts + 1] = M.markWords(x.text, runs, true) end
         if x.translation then parts[#parts + 1] = x.translation end
         return table.concat(parts, "\n\n")
     end
+    local title = string.format("%d:%d ↔ %d:%d",
+        d.a.surah, d.a.ayah, d.b.surah, d.b.ayah)
+    if d.pos and d.total and d.total > 1 then
+        -- the list position (owner: "X out of Y in this list")
+        title = title .. string.format(" · %d/%d", d.pos, d.total)
+    end
     return {
-        title = string.format("%s %d:%d ↔ %d:%d",
-            d.kind == "phrase" and _("Repeated phrase") or _("Similar ayahs"),
-            d.a.surah, d.a.ayah, d.b.surah, d.b.ayah),
-        text = meta .. "\n\n" .. section(d.a, d.a_runs)
+        title = title,
+        text = PTF_HEADER .. meta .. "\n\n" .. section(d.a, d.a_runs)
             .. "\n\n· · ·\n\n" .. section(d.b, d.b_runs),
     }
 end
@@ -842,30 +962,53 @@ function M.showSimilarPair(browser, origin, list, idx)
             translation = qt and transPreview(quran, qt, tconn, s, a) or nil,
         }
     end
+    local a_side = side(origin.surah, origin.ayah)
+    local b_side = side(m.surah, m.ayah)
+    -- meaning pairs: shared-root evidence from morphology (optional)
+    local shared_roots, sr_a_runs, sr_b_runs
+    if m.kind == "meaning" then
+        local masaq = browser.masaqModule and browser:masaqModule()
+        local okm, mconn = pcall(function()
+            return masaq and masaq.morphConn and masaq.morphConn(quran)
+                or nil
+        end)
+        if okm and mconn then
+            shared_roots, sr_a_runs, sr_b_runs = M.sharedRootEvidence(
+                mconn, origin.surah, origin.ayah, m.surah, m.ayah,
+                a_side.text, b_side.text)
+        end
+    end
     local spec = M.similarPairSpec{
         kind = m.kind or "wording",
         score = m.score,
         common_roots = m.common_roots,
-        a = side(origin.surah, origin.ayah),
-        b = side(m.surah, m.ayah),
-        a_runs = rev and rev.match_words or nil,
-        b_runs = fwd and fwd.match_words or nil,
+        shared_roots = shared_roots,
+        pos = idx, total = #list,
+        a = a_side,
+        b = b_side,
+        a_runs = (rev and rev.match_words) or sr_a_runs,
+        b_runs = (fwd and fwd.match_words) or sr_b_runs,
         a_cov = rev and rev.coverage or nil,
         b_cov = fwd and fwd.coverage or nil,
         n_words = (fwd and fwd.matched_words_count)
             or (rev and rev.matched_words_count) or nil,
     }
+    -- ◀ ▶ LOOP the list (owner 2026-07-26: the scroll stopped at the
+    -- ends); a single-pair list keeps them off
+    local many = #list > 1
     reader.show{
         kind = "simpair",  -- one hop identity: ◀ ▶ stepping replaces
         title = spec.title,
         text = spec.text,
         content_rtl = true,
         back_label = "← " .. _("Similar ayahs"),
-        prev = idx > 1 and function()
-            M.showSimilarPair(browser, origin, list, idx - 1)
+        prev = many and function()
+            M.showSimilarPair(browser, origin, list,
+                idx > 1 and idx - 1 or #list)
         end or nil,
-        next = idx < #list and function()
-            M.showSimilarPair(browser, origin, list, idx + 1)
+        next = many and function()
+            M.showSimilarPair(browser, origin, list,
+                idx < #list and idx + 1 or 1)
         end or nil,
         extra_buttons = {
             {
@@ -962,16 +1105,28 @@ function M.showPhrasePair(browser, count, occ, a_idx, idx)
         return (o.w_from and o.w_to) and { { o.w_from, o.w_to } } or nil
     end
     local a = occ[a_idx]
+    -- position among the OTHER occurrences (the anchor never counts
+    -- itself); ◀ ▶ loop that ring (owner 2026-07-26)
+    local total = #occ - ((occ[a_idx] ~= nil) and 1 or 0)
+    local pos = 0
+    for j = 1, idx do
+        if j ~= a_idx then pos = pos + 1 end
+    end
     local spec = M.similarPairSpec{
         kind = "phrase", count = count,
+        pos = pos, total = total,
         a = side(a), b = side(b),
         a_runs = runs(a), b_runs = runs(b),
     }
     local function step(dir)
-        local j = idx + dir
-        if j == a_idx then j = j + dir end
-        if not occ[j] then return nil end
+        if total < 2 then return nil end
         return function()
+            local j = idx
+            repeat
+                j = j + dir
+                if j < 1 then j = #occ end
+                if j > #occ then j = 1 end
+            until j ~= a_idx
             M.showPhrasePair(browser, count, occ, a_idx, j)
         end
     end

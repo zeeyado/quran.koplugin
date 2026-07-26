@@ -877,19 +877,19 @@ do
         true, "assets: dicts.json fetches from the dict bucket")
     eq(asrc:find('"_catalog", booksBase() .. "/catalog.json"', 1, true) ~= nil,
         true, "assets: catalog.json fetches from the books home")
-    -- ND-12 home-folder detection: the install scan covers the home
-    -- root (books kept there read as not-installed before); first hit
-    -- wins so the configured books folder stays canonical; reading
-    -- history deliberately NOT scanned (owner 2026-07-22: test copies
-    -- opened elsewhere must stay unrecognized)
-    eq(asrc:find("addDir(G_reader_settings", 1, true) ~= nil, true,
-        "nd12-home: home root joins the install scan")
-    eq(asrc:find("and not found[entry] then", 1, true) ~= nil, true,
-        "nd12-home: first-found dir wins")
+    -- Scan scope (owner 2026-07-26, settling the ND-12 question):
+    -- installed-book detection lists the CONFIGURED books folder only;
+    -- no home-root scan, no open-book-dir fold, no reading history
     local fib = asrc:match("local function findInstalledBooks.-\nend")
-    eq(fib ~= nil, true, "nd12-home: scan function sliced")
+    eq(fib ~= nil, true, "scan-scope: scan function sliced")
+    eq(fib:find("booksDir", 1, true) ~= nil, true,
+        "scan-scope: the configured books folder is scanned")
+    eq(fib:find("home_dir", 1, true), nil,
+        "scan-scope: no home-root scan")
+    eq(fib:find("ui.document", 1, true), nil,
+        "scan-scope: no open-book-dir fold")
     eq(fib:find("readhistory"), nil,
-        "nd12-home: history stays out of install detection")
+        "scan-scope: history stays out of install detection")
 end
 
 local merged = QAS.mergeDictState(
@@ -3153,19 +3153,34 @@ do
         a_runs = { { 1, 2 } }, b_runs = { { 2, 4 } },
         a_cov = 20, b_cov = 34, n_words = 10,
     }
-    eq(sp.title, "Similar ayahs 2:255 ↔ 42:4", "pair-spec: title = the pair")
+    eq(sp.title, "2:255 ↔ 42:4", "pair-spec: bare pair title (no kind prefix)")
+    eq(sp.text:sub(1, 3), "\239\191\177",
+        "pair-spec: PTF surface (bold-capable)")
+    local spc = QQ.similarPairSpec{
+        kind = "wording", score = 1, pos = 3, total = 12,
+        a = { surah = 2, ayah = 255 }, b = { surah = 42, ayah = 4 },
+    }
+    eq(spc.title, "2:255 ↔ 42:4 · 3/12",
+        "pair-spec: list position rides the title")
+    local spm = QQ.similarPairSpec{
+        kind = "meaning", score = 2,
+        shared_roots = { "ش-ي-أ", "ذ-ه-ب" },
+        a = { surah = 14, ayah = 19 }, b = { surah = 4, ayah = 133 },
+    }
+    eq(spm.text:find("Shared roots: ش-ي-أ · ذ-ه-ب", 1, true) ~= nil, true,
+        "pair-spec: meaning evidence line lists the roots")
     eq(sp.text:find("Matched wording · 69% · 10 matched words", 1, true) ~= nil,
         true, "pair-spec: meta leads with % and word count")
     eq(sp.text:find("(20% of 2:255 · 34% of 42:4)", 1, true) ~= nil, true,
         "pair-spec: per-side coverage")
     eq(sp.text:find("Matched wording is marked ﴿ ﴾", 1, true) ~= nil, true,
         "pair-spec: marks legend when runs exist")
-    eq(sp.text:find("﴿t1 t2﴾ t3", 1, true) ~= nil, true,
+    eq(sp.text:find("￲﴿t1 t2﴾￳ t3", 1, true) ~= nil, true,
         "pair-spec: a-side run marked")
-    eq(sp.text:find("u1 ﴿u2 u3 u4﴾", 1, true) ~= nil, true,
+    eq(sp.text:find("u1 ￲﴿u2 u3 u4﴾￳", 1, true) ~= nil, true,
         "pair-spec: b-side run marked")
-    eq(sp.text:find("Al-Baqarah 2:255", 1, true) ~= nil, true,
-        "pair-spec: locus headers")
+    eq(sp.text:find("￲Al-Baqarah 2:255￳", 1, true) ~= nil, true,
+        "pair-spec: locus headers bold")
     eq(sp.text:find("TA", 1, true) ~= nil, true,
         "pair-spec: translations included")
     local sp2 = QQ.similarPairSpec{
@@ -3174,22 +3189,22 @@ do
     }
     eq(sp2.text:find("Related in meaning · QurSim · strong · 3 shared roots",
         1, true) ~= nil, true, "pair-spec: meaning meta (strong + roots)")
-    eq(sp2.title, "Similar ayahs 2:255 ↔ 3:2",
-        "pair-spec: meaning pair titled")
+    eq(sp2.title, "2:255 ↔ 3:2",
+        "pair-spec: meaning pair titled bare")
     local sp3 = QQ.similarPairSpec{
         kind = "phrase", count = 4,
         a = { surah = 2, ayah = 3, text = "x1 x2 x3 x4" },
         b = { surah = 8, ayah = 3, text = "y1 y2 y3" },
         a_runs = { { 1, 2 } }, b_runs = { { 2, 3 } },
     }
-    eq(sp3.title, "Repeated phrase 2:3 ↔ 8:3", "pair-spec: phrase pair titled")
+    eq(sp3.title, "2:3 ↔ 8:3", "pair-spec: phrase pair titled bare")
     eq(sp3.text:find("Repeated phrase ×4", 1, true) ~= nil, true,
         "pair-spec: phrase meta = ×count")
     eq(sp3.text:find("The phrase is marked ﴿ ﴾", 1, true) ~= nil, true,
         "pair-spec: phrase marks legend")
-    eq(sp3.text:find("﴿x1 x2﴾ x3 x4", 1, true) ~= nil, true,
+    eq(sp3.text:find("￲﴿x1 x2﴾￳ x3 x4", 1, true) ~= nil, true,
         "pair-spec: phrase a-side marked")
-    eq(sp3.text:find("y1 ﴿y2 y3﴾", 1, true) ~= nil, true,
+    eq(sp3.text:find("y1 ￲﴿y2 y3﴾￳", 1, true) ~= nil, true,
         "pair-spec: phrase b-side marked")
 end
 
@@ -3273,6 +3288,36 @@ if have_qul and sq3_ok then
         and skept[3].group_id == 3, true,
         "nd12-phr pure: order preserved, g4 folded into g1")
     eq(skept[3].anchor_ayah, 2, "nd12-phr pure: per-group anchor ayah")
+
+    -- word axis: standalone ۞ tokens drop out, so morphology word_pos
+    -- marks land on the right rendered token
+    eq(QQ.wordAxisMap("\219\158 \216\168 \216\168")[2], 3,
+        "qul-axis: ayah-mark token dropped from the word axis")
+    eq(QQ.wordAxisMap("\216\168 \216\168")[2], 2,
+        "qul-axis: plain ayahs map 1:1")
+
+    -- meaning-pair evidence: shared roots computed from morphology
+    -- (the owner's 14:19 ↔ 4:133 QurSim example shares شيأ/ذهب/أتي)
+    local morph_db2 = DATA_ROOT .. "/data/morphology-v1.sqlite"
+    local have_m2 = io.open(morph_db2)
+    if have_m2 then
+        have_m2:close()
+        local SQ3m = require("lua-ljsqlite3/init")
+        local mc2 = SQ3m.open(morph_db2, "ro")
+        local names = QQ.sharedRootEvidence(mc2, 14, 19, 4, 133, nil, nil)
+        eq(names ~= nil and #names >= 3, true,
+            "sr-evidence: 14:19 ↔ 4:133 share roots")
+        local has_dhahab = false
+        for _i, n in ipairs(names) do
+            if n:find("ذ%-ه%-ب") then has_dhahab = true end
+        end
+        eq(has_dhahab, true, "sr-evidence: ذ-ه-ب among the shared roots")
+        eq(QQ.sharedRootEvidence(mc2, 108, 2, 111, 4, nil, nil), nil,
+            "sr-evidence: no shared roots -> nil (108:2 vs 111:4)")
+        mc2:close()
+    else
+        print("skip sr-evidence tests (morphology extract not staged)")
+    end
 
     -- R3-F22: the phrase itself from the Hafs text (word-slice by the
     -- group's source positions; verified against the real db offsets)
@@ -4990,8 +5035,8 @@ if have_qul and sq3_ok then
         nav_items[1].callback()
         eq(simspec ~= nil and simspec.kind == "phrpair", true,
             "dense-phr: occurrence tap opens the comparison pair view")
-        eq(simspec.title:find("Repeated phrase", 1, true) ~= nil, true,
-            "dense-phr: pair view titled with the phrase kind")
+        eq(simspec.title:find("↔", 1, true) ~= nil, true,
+            "dense-phr: pair view titled with the bare pair")
         eq(simspec.text:find("﴿", 1, true) ~= nil, true,
             "dense-phr: the phrase marked in the pair text")
         uap_route = nil

@@ -638,41 +638,24 @@ local function booksDir(quran)
     return base .. "/Quran"
 end
 
--- Set of EPUB filenames present in the books folder, the KOReader home
--- folder root, and next to the currently open book: {filename -> dir}.
--- ND-12 home-folder detection (owner soak note): books kept in the home
--- root itself were invisible (only <home>/Quran was scanned), so Get
--- books showed them as not installed. First hit wins, so the configured
--- books folder stays the canonical target for Update/Delete. NOT
--- widened to reading-history paths: test copies opened from elsewhere
--- must stay unrecognized (owner 2026-07-22 scope directive).
+-- Set of EPUB filenames in the CONFIGURED books folder only:
+-- {filename -> dir}. Owner 2026-07-26 (settling the ND-12 scan
+-- question): detection follows the books folder (default <home>/Quran
+-- or the user's setting) and NOTHING else — no home-root scan, no
+-- open-book-dir fold, no reading history. A book kept elsewhere is
+-- deliberately unrecognized: predictable beats clever, and sideloads
+-- INTO the folder are still seen because this is a listing of that
+-- folder, not a ledger.
 local function findInstalledBooks(quran)
     local lfs = require("libs/libkoreader-lfs")
     local found = {}
-    local dirs, seen_dirs = {}, {}
-    local function addDir(d)
-        if d and d ~= "" and not seen_dirs[d] then
-            seen_dirs[d] = true
-            table.insert(dirs, d)
-        end
-    end
-    addDir(booksDir(quran))
-    addDir(G_reader_settings
-        and G_reader_settings:readSetting("home_dir") or nil)
-    local cur = quran.ui and quran.ui.document and quran.ui.document.file
-    if cur then
-        addDir(cur:match("^(.*)/[^/]+$"))
-    end
-    for _i, dir in ipairs(dirs) do
-        if lfs.attributes(dir, "mode") == "directory" then
-            pcall(function()
-                for entry in lfs.dir(dir) do
-                    if entry:match("%.epub$") and not found[entry] then
-                        found[entry] = dir
-                    end
-                end
-            end)
-        end
+    local dir = booksDir(quran)
+    if dir and lfs.attributes(dir, "mode") == "directory" then
+        pcall(function()
+            for entry in lfs.dir(dir) do
+                if entry:match("%.epub$") then found[entry] = dir end
+            end
+        end)
     end
     return found
 end
@@ -1526,9 +1509,10 @@ end
 -- elsewhere stay out). Full metadata across two lines, no clipping.
 -- ---------------------------------------------------------------------
 
--- EPUBs in the configured books folder: filename -> dir. Distinct from
--- findInstalledBooks, which also folds in the open book's own directory
--- for the catalog's ✓ marker; the inventory is folder-scoped.
+-- EPUBs in the configured books folder: filename -> dir. Same scope as
+-- findInstalledBooks since the owner's 2026-07-26 call (detection =
+-- the books folder, period); kept separate for its different home in
+-- the file and the My-books commentary above.
 local function scanBooksFolder(quran)
     local lfs = require("libs/libkoreader-lfs")
     local dir = booksDir(quran)
