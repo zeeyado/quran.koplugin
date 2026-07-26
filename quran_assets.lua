@@ -263,9 +263,21 @@ local function withInfo(text, fn)
     return r1, r2
 end
 
+-- Restart notice, capability-aware (owner 2026-07-26: "asks 'restart
+-- koreader now' but gives no restart button"). askForRestart only
+-- yields a Restart-now ConfirmBox when Device:canRestart(); on the
+-- rest (Android canRestart=no, the macOS .app canRestart=notOSX) it
+-- degrades to a button-less InfoMessage, so a "now?" question there
+-- asks for a tap that cannot exist. Branch on the capability: real
+-- button where possible, plain statement where not.
 local function askRestart(text)
     local UIManager = require("ui/uimanager")
-    if UIManager.askForRestart then
+    local can_restart = false
+    local okd, Device = pcall(require, "device")
+    if okd and Device and Device.canRestart then
+        can_restart = Device:canRestart() and true or false
+    end
+    if can_restart and UIManager.askForRestart then
         UIManager:askForRestart(text .. "\n" .. _("Restart KOReader now?"))
     else
         notify(text .. "\n" .. _("Restart KOReader to activate it."))

@@ -952,6 +952,22 @@ do
     eq(qp ~= nil, true, "round7: quick panel sliced")
     eq(qp:find("visibleAyahRange", 1, true) ~= nil, true,
         "round7: panel title carries the visible range")
+    -- round 8: restart notices are capability-aware (Android and the
+    -- macOS .app cannot restart; the "now?" question only shows where
+    -- a Restart button can exist) and every entry point rides the ONE
+    -- askRestart helper (dict install, dict remove, plugin update)
+    local asrc8 = io.open(PLUGIN_DIR .. "/quran_assets.lua"):read("*a")
+    local ar = asrc8:match("local function askRestart.-\nend")
+    eq(ar ~= nil, true, "restart: askRestart sliced")
+    eq(ar:find("canRestart", 1, true) ~= nil, true,
+        "restart: branches on Device:canRestart")
+    eq(ar:find('_("Restart KOReader now?")', 1, true) ~= nil, true,
+        "restart: the question only on the button-capable branch")
+    eq(ar:find('_("Restart KOReader to activate it.")', 1, true) ~= nil,
+        true, "restart: statement wording on the button-less branch")
+    local n_ar = 0
+    for _ in asrc8:gmatch("askRestart%(") do n_ar = n_ar + 1 end
+    eq(n_ar, 4, "restart: one helper + exactly 3 entry points ride it")
 end
 
 local merged = QAS.mergeDictState(
