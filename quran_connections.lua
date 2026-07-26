@@ -712,6 +712,24 @@ local function figureLabel(f)
     return label
 end
 
+--- Entry-context promotion (owner 2026-07-26, the ND-17 principle):
+-- lists stay GLOBAL; entered from a surah-scoped path, that surah's
+-- rows pin to the top under a small header. Ordering, not filtering.
+local function promoteRows(items, pinned, rest, quran, entry_surah)
+    if #pinned > 0 then
+        local name = quran and quran.surahName
+            and quran:surahName(entry_surah) or tostring(entry_surah)
+        table.insert(items, {
+            text = string.format(_("In %s (%d)"), name, #pinned),
+            bold = true,
+            select_enabled = false,
+        })
+        for _i, r in ipairs(pinned) do table.insert(items, r) end
+        if #rest > 0 then items[#items].separator = true end
+    end
+    for _i, r in ipairs(rest) do table.insert(items, r) end
+end
+
 --- Figures landing: every figure, name-hit frequency first (the
 -- root-explorer landing principle; unnamed figures land at the tail
 -- and open the same entity screen through their story units).
@@ -740,7 +758,7 @@ end
 --- Figure entity screen (the topic/theme entity idiom): About first,
 -- then the story units it appears in, its name occurrences, and the
 -- figures it shares stories with.
-function M.showFigure(browser, id)
+function M.showFigure(browser, id, opts)
     local conn, err = M.ensureDb(browser.quran)
     if not conn then notifyWarn(err) return end
     local f = M.figure(conn, id)
@@ -748,6 +766,7 @@ function M.showFigure(browser, id)
         notifyWarn(_("Character not found."))
         return
     end
+    local entry_surah = opts and opts.entry_surah
     local items = {}
     table.insert(items, {
         text = _("About") .. ": " .. f.name_en,
@@ -756,24 +775,27 @@ function M.showFigure(browser, id)
         end,
     })
     local units = M.figureUnits(conn, id)
+    local u_pin, u_rest = {}, {}
     for _i, u in ipairs(units) do
         local uid = u.id
         local text = u.title
         if u.role and u.role ~= "" then
             text = text .. " \194\183 " .. u.role
         end
-        table.insert(items, {
+        local us = M.keyToSA(u.from_ayah_key)
+        table.insert(us == entry_surah and u_pin or u_rest, {
             text = "\226\150\184 " .. text,
             mandatory = M.spanLabel(u.from_ayah_key, u.to_ayah_key),
-            callback = function() M.showUnit(browser, uid) end,
+            callback = function() M.showUnit(browser, uid, opts) end,
         })
     end
+    promoteRows(items, u_pin, u_rest, browser.quran, entry_surah)
     local ayahs = M.figureAyahs(conn, id)
     if #ayahs > 0 then
         table.insert(items, {
             text = _("Mentioned in ayahs"),
             mandatory = "\195\151" .. #ayahs,
-            callback = function() M.showFigureAyahs(browser, f) end,
+            callback = function() M.showFigureAyahs(browser, f, opts) end,
         })
     end
     for _i, rf in ipairs(M.relatedFigures(conn, id)) do
@@ -781,26 +803,29 @@ function M.showFigure(browser, id)
         table.insert(items, {
             text = "\226\137\136 " .. figureLabel(rf),
             mandatory = "\195\151" .. rf.n_shared,
-            callback = function() M.showFigure(browser, rid) end,
+            callback = function() M.showFigure(browser, rid, opts) end,
         })
     end
     browser:navigateForward(f.name_en, items, nil, { multiline = true })
 end
 
-function M.showFigureAyahs(browser, f)
+function M.showFigureAyahs(browser, f, opts)
     local conn, err = M.ensureDb(browser.quran)
     if not conn then notifyWarn(err) return end
     local quran = browser.quran
+    local entry_surah = opts and opts.entry_surah
     local items = {}
+    local a_pin, a_rest = {}, {}
     for _i, e in ipairs(M.figureAyahs(conn, f.id)) do
         local s, a = e.surah, e.ayah
         local name = quran.surahName and quran:surahName(s) or tostring(s)
-        table.insert(items, {
+        table.insert(s == entry_surah and a_pin or a_rest, {
             text = string.format("%s %d:%d", name, s, a),
             mandatory = e.n > 1 and ("\195\151" .. e.n) or nil,
             callback = function() ayahDialog(browser, s, a) end,
         })
     end
+    promoteRows(items, a_pin, a_rest, quran, entry_surah)
     browser:navigateForward(f.name_en .. " \194\183 " .. _("Mentioned in ayahs"),
         items)
 end
@@ -822,26 +847,30 @@ function M.showStories(browser)
 end
 
 --- One story cycle: its units in narrative order, episodes indented.
-function M.showStory(browser, story)
+function M.showStory(browser, story, opts)
     local conn, err = M.ensureDb(browser.quran)
     if not conn then notifyWarn(err) return end
+    local entry_surah = opts and opts.entry_surah
     local items = {}
+    local u_pin, u_rest = {}, {}
     for _i, u in ipairs(M.unitsForStory(conn, story)) do
         local uid = u.id
         local prefix = (u.depth or 0) > 0 and "    \226\150\184 " or ""
-        table.insert(items, {
+        local us = M.keyToSA(u.from_ayah_key)
+        table.insert(us == entry_surah and u_pin or u_rest, {
             text = prefix .. u.title,
             mandatory = M.spanLabel(u.from_ayah_key, u.to_ayah_key),
-            callback = function() M.showUnit(browser, uid) end,
+            callback = function() M.showUnit(browser, uid, opts) end,
         })
     end
+    promoteRows(items, u_pin, u_rest, browser.quran, entry_surah)
     browser:navigateForward(M.storyLabel(story), items, nil,
         { multiline = true })
 end
 
 --- Story-unit screen: read the passage FIRST (D-R3-6), then position,
 -- context (cycle/parent/episodes), the figures in it, and its ayahs.
-function M.showUnit(browser, id)
+function M.showUnit(browser, id, opts)
     local conn, err = M.ensureDb(browser.quran)
     if not conn then notifyWarn(err) return end
     local u = M.unit(conn, id)
@@ -892,7 +921,7 @@ function M.showUnit(browser, id)
     local story_key = u.story
     table.insert(items, {
         text = "\226\134\145 " .. M.storyLabel(u.story),
-        callback = function() M.showStory(browser, story_key) end,
+        callback = function() M.showStory(browser, story_key, opts) end,
     })
     if u.parent_id then
         local p = M.unit(conn, u.parent_id)
@@ -901,7 +930,7 @@ function M.showUnit(browser, id)
             table.insert(items, {
                 text = "\226\134\145 " .. p.title,
                 mandatory = M.spanLabel(p.from_ayah_key, p.to_ayah_key),
-                callback = function() M.showUnit(browser, pid) end,
+                callback = function() M.showUnit(browser, pid, opts) end,
             })
         end
     end
@@ -910,7 +939,7 @@ function M.showUnit(browser, id)
         table.insert(items, {
             text = "\226\150\184 " .. c.title,
             mandatory = M.spanLabel(c.from_ayah_key, c.to_ayah_key),
-            callback = function() M.showUnit(browser, cid) end,
+            callback = function() M.showUnit(browser, cid, opts) end,
         })
     end
     for _i, fg in ipairs(M.unitFigures(conn, id)) do
@@ -920,7 +949,7 @@ function M.showUnit(browser, id)
             text = text .. " \194\183 " .. fg.role
         end
         table.insert(items, { text = text,
-            callback = function() M.showFigure(browser, fid) end,
+            callback = function() M.showFigure(browser, fid, opts) end,
         })
     end
     if #items > 0 then items[#items].separator = true end
@@ -950,7 +979,9 @@ function M.showFiguresAt(browser, surah, ayah)
         table.insert(items, {
             text = figureLabel(f),
             mandatory = f.n > 1 and ("\195\151" .. f.n) or nil,
-            callback = function() M.showFigure(browser, fid) end,
+            callback = function()
+                M.showFigure(browser, fid, { entry_surah = surah })
+            end,
         })
     end
     browser:navigateForward(
@@ -971,7 +1002,9 @@ function M.showStoryContext(browser, surah, ayah)
         table.insert(items, {
             text = u.title .. " \194\183 " .. M.storyLabel(u.story),
             mandatory = M.spanLabel(u.from_ayah_key, u.to_ayah_key),
-            callback = function() M.showUnit(browser, uid) end,
+            callback = function()
+                M.showUnit(browser, uid, { entry_surah = surah })
+            end,
         })
     end
     browser:navigateForward(
@@ -994,7 +1027,9 @@ function M.showFiguresInSurah(browser, surah)
         table.insert(items, {
             text = figureLabel(f),
             mandatory = "\195\151" .. f.n_ayahs,
-            callback = function() M.showFigure(browser, fid) end,
+            callback = function()
+                M.showFigure(browser, fid, { entry_surah = surah })
+            end,
         })
     end
     local name = browser.quran.surahName
@@ -1016,7 +1051,9 @@ function M.showStoriesInSurah(browser, surah)
         table.insert(items, {
             text = u.title .. " \194\183 " .. M.storyLabel(u.story),
             mandatory = M.spanLabel(u.from_ayah_key, u.to_ayah_key),
-            callback = function() M.showUnit(browser, uid) end,
+            callback = function()
+                M.showUnit(browser, uid, { entry_surah = surah })
+            end,
         })
     end
     local name = browser.quran.surahName

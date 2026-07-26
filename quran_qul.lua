@@ -806,7 +806,25 @@ local function topicCounts(t)
     if #bits > 0 then return table.concat(bits, " · ") end
 end
 
-local function topicItem(browser, t)
+--- Entry-context promotion (owner 2026-07-26, the ND-17 principle):
+-- lists stay GLOBAL; entered from a surah-scoped path, that surah's
+-- rows pin to the top under a small header. Ordering, not filtering.
+local function promoteRows(items, pinned, rest, quran, entry_surah)
+    if #pinned > 0 then
+        local name = quran and quran.surahName
+            and quran:surahName(entry_surah) or tostring(entry_surah)
+        table.insert(items, {
+            text = string.format(_("In %s (%d)"), name, #pinned),
+            bold = true,
+            select_enabled = false,
+        })
+        for _i, r in ipairs(pinned) do table.insert(items, r) end
+        if #rest > 0 then items[#items].separator = true end
+    end
+    for _i, r in ipairs(rest) do table.insert(items, r) end
+end
+
+local function topicItem(browser, t, opts)
     local label = t.name
     if t.arabic_name and t.arabic_name ~= "" then
         label = label .. "  " .. t.arabic_name
@@ -814,7 +832,7 @@ local function topicItem(browser, t)
     return {
         text = label,
         mandatory = topicCounts(t),
-        callback = function() M.showTopic(browser, t.topic_id) end,
+        callback = function() M.showTopic(browser, t.topic_id, opts) end,
     }
 end
 
@@ -1256,7 +1274,7 @@ function M.showTheme(browser, t)
     browser:navigateForward(title, items)
 end
 
-function M.showTopic(browser, topic_id)
+function M.showTopic(browser, topic_id, opts)
     local conn, err = M.ensureDb(browser.quran)
     if not conn then notifyWarn(err) return end
     local t = M.topic(conn, topic_id)
@@ -1307,7 +1325,7 @@ function M.showTopic(browser, topic_id)
         table.insert(items, {
             text = "↑ " .. p.name,
             mandatory = topicCounts(p),
-            callback = function() M.showTopic(browser, pid) end,
+            callback = function() M.showTopic(browser, pid, opts) end,
         })
     end
     for _i, c in ipairs(M.topicChildren(conn, topic_id)) do
@@ -1315,7 +1333,7 @@ function M.showTopic(browser, topic_id)
         table.insert(items, {
             text = "▸ " .. c.name,
             mandatory = topicCounts(c),
-            callback = function() M.showTopic(browser, cid) end,
+            callback = function() M.showTopic(browser, cid, opts) end,
         })
     end
     for _i, rt in ipairs(M.relatedTopics(conn, t)) do
@@ -1324,20 +1342,23 @@ function M.showTopic(browser, topic_id)
             -- D-R3-6: QUL sideways link, no range guarantee — "Related:"
             text = _("Related") .. ": " .. rt.name,
             mandatory = topicCounts(rt),
-            callback = function() M.showTopic(browser, rid) end,
+            callback = function() M.showTopic(browser, rid, opts) end,
         })
     end
     if #items > 0 then items[#items].separator = true end
     local quran = browser.quran
+    local entry_surah = opts and opts.entry_surah
+    local a_pin, a_rest = {}, {}
     for _i, sa in ipairs(M.topicAyahs(conn, topic_id)) do
         local name = quran.surahName and quran:surahName(sa.surah) or tostring(sa.surah)
-        table.insert(items, {
+        table.insert(sa.surah == entry_surah and a_pin or a_rest, {
             text = string.format("%s %d:%d", name, sa.surah, sa.ayah),
             callback = function()
                 ayahDialog(browser, sa.surah, sa.ayah, t.name)
             end,
         })
     end
+    promoteRows(items, a_pin, a_rest, quran, entry_surah)
     if #items == 0 then
         notifyWarn(_("Nothing recorded under this topic."))
         return
@@ -1362,7 +1383,9 @@ function M.showTopicsFor(browser, surah, ayah)
         end
         table.insert(items, {
             text = text,
-            callback = function() M.showTopic(browser, tid) end,
+            callback = function()
+                M.showTopic(browser, tid, { entry_surah = surah })
+            end,
         })
     end
     browser:navigateForward(_("Topics") .. string.format(" %d:%d", surah, ayah), items)
@@ -1459,7 +1482,7 @@ function M.showTopicsForSurah(browser, surah)
     end
     local items = {}
     for _i, t in ipairs(list) do
-        table.insert(items, topicItem(browser, t))
+        table.insert(items, topicItem(browser, t, { entry_surah = surah }))
     end
     local name = browser.quran.surahName
         and browser.quran:surahName(surah) or tostring(surah)

@@ -3362,6 +3362,49 @@ if have_qul and sq3_ok then
         if it.text:find("^Related: ") then n_rel = n_rel + 1 end
     end
     eq(n_rel, 3, "qul-conn: related rows labeled 'Related:' (D-R3-6)")
+
+    -- ND-17 entry-context promotion (owner 2026-07-26): entered from a
+    -- surah-scoped path, that surah's occurrences pin to the top under
+    -- a bold inert header; ordering not filtering (rows only grow by
+    -- the header, nothing dropped)
+    local m_ayahs = QQ.topicAyahs(qconn, 63)
+    eq(#m_ayahs > 1, true, "promo-topic: mosque topic has occurrences")
+    local psurah = m_ayahs[#m_ayahs].surah
+    local n_ps = 0
+    for _i, sa in ipairs(m_ayahs) do
+        if sa.surah == psurah then n_ps = n_ps + 1 end
+    end
+    QQ.showTopic(thbrowser, 63)
+    local n_topic_global = #nav_i
+    QQ.showTopic(thbrowser, 63, { entry_surah = psurah })
+    eq(#nav_i, n_topic_global + 1, "promo-topic: ordering not filtering")
+    local hdr_i
+    for _i, it in ipairs(nav_i) do
+        if it.text == ("In Surah" .. psurah .. " (" .. n_ps .. ")") then
+            hdr_i = _i break
+        end
+    end
+    eq(hdr_i ~= nil, true, "promo-topic: header names entry surah + count")
+    eq(nav_i[hdr_i].bold, true, "promo-topic: header bold")
+    eq(nav_i[hdr_i].select_enabled, false, "promo-topic: header inert")
+    eq(nav_i[hdr_i].callback, nil, "promo-topic: header has no callback")
+    eq(nav_i[hdr_i + 1].text:find("^Surah" .. psurah .. " ") ~= nil, true,
+        "promo-topic: pinned occurrence rows follow the header")
+    eq(nav_i[hdr_i + n_ps].separator, true,
+        "promo-topic: separator closes the pinned block")
+    eq(nav_i[hdr_i + n_ps + 1].text:find("^Surah" .. psurah .. " "), nil,
+        "promo-topic: full list resumes after the pin")
+    -- threading: the hub topics list passes its surah down
+    QQ.showTopicsForSurah(thbrowser, psurah)
+    nav_i[1].callback()
+    local promo_hit = false
+    for _i, it in ipairs(nav_i) do
+        if it.bold and it.text:find("^In Surah" .. psurah .. " %(") then
+            promo_hit = true break
+        end
+    end
+    eq(promo_hit, true, "promo-topic: hub topic list arrives promoted")
+
     -- theme LIST rows route to the theme screen now (not straight to UAP)
     QQ.showThemeItems(thbrowser,
         { { theme = "W", surah = 2, ayah_from = 6, ayah_to = 7 } }, "T", nil)
@@ -3618,6 +3661,66 @@ if have_cx and sq3_ok then
     eq(nav_t:find("Narrative context", 1, true) ~= nil, true,
         "cx-screens: story-context list screen")
     eq(#nav_i, 2, "cx-screens: both nested units listed (D-R3-12 no sibling loss)")
+
+    -- ND-17 entry-context promotion (owner 2026-07-26): a cross-surah
+    -- cycle entered from the surah-18 path pins its surah-18 units on
+    -- top under a bold inert header; ordering not filtering
+    local promo_story, promo_in18, promo_total
+    for _i, st in ipairs(QC.stories(cconn)) do
+        local n18, other = 0, false
+        local st_units = QC.unitsForStory(cconn, st.story)
+        for _j, u2 in ipairs(st_units) do
+            if QC.keyToSA(u2.from_ayah_key) == 18 then n18 = n18 + 1
+            else other = true end
+        end
+        if n18 > 0 and other then
+            promo_story, promo_in18, promo_total = st.story, n18, #st_units
+            break
+        end
+    end
+    eq(promo_story ~= nil, true, "promo-cx: a cross-surah cycle touches surah 18")
+    QC.showStory(cxb, promo_story)
+    eq(#nav_i, promo_total, "promo-cx: no entry context, no header")
+    QC.showStory(cxb, promo_story, { entry_surah = 18 })
+    eq(#nav_i, promo_total + 1, "promo-cx: ordering not filtering (units + header)")
+    eq(nav_i[1].text, "In Surah18 (" .. promo_in18 .. ")",
+        "promo-cx: header names entry surah + count")
+    eq(nav_i[1].bold, true, "promo-cx: header bold")
+    eq(nav_i[1].select_enabled, false, "promo-cx: header inert")
+    eq(nav_i[1].callback, nil, "promo-cx: header has no callback")
+    for k = 2, promo_in18 + 1 do
+        eq(nav_i[k].mandatory:find("^18:") ~= nil, true,
+            "promo-cx: pinned rows carry surah-18 spans")
+    end
+    eq(nav_i[promo_in18 + 1].separator, true,
+        "promo-cx: separator closes the pinned block")
+    eq(nav_i[promo_in18 + 2].mandatory:find("^18:"), nil,
+        "promo-cx: full list resumes after the pin")
+    -- threading: hub Narratives list -> unit -> up-arrow arrives promoted
+    QC.showStoriesInSurah(cxb, 18)
+    nav_i[1].callback()
+    local up_row
+    for _i, it in ipairs(nav_i) do
+        if it.text:find("\226\134\145", 1, true) then up_row = it break end
+    end
+    eq(up_row ~= nil, true, "promo-cx: unit screen keeps its up-to-cycle row")
+    up_row.callback()
+    eq(nav_i[1].bold and nav_i[1].text:find("^In Surah18 %(") ~= nil, true,
+        "promo-cx: hub narrative path arrives promoted at the cycle")
+    -- figures: Joseph from the surah-12 list; his mention list pins 12
+    QC.showFiguresInSurah(cxb, 12)
+    nav_i[1].callback()
+    eq(nav_t, "Joseph", "promo-cx: figure screen reached from the hub list")
+    local ment_row
+    for _i, it in ipairs(nav_i) do
+        if it.text == "Mentioned in ayahs" then ment_row = it break end
+    end
+    eq(ment_row ~= nil, true, "promo-cx: mentions row present")
+    ment_row.callback()
+    eq(nav_i[1].bold and nav_i[1].text:find("^In Surah12 %(") ~= nil, true,
+        "promo-cx: mention list pins the entry surah")
+    eq(nav_i[#nav_i].text:find("^Surah12 "), nil,
+        "promo-cx: cross-surah mentions kept below (ordering not filtering)")
 
     -- Similar surface union (qul wording + semantic sections): 2:255
     -- with the REAL qul db when staged, else semantic-only
