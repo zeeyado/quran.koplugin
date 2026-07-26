@@ -71,7 +71,7 @@ end
 function M.rootItemText(r)
     local text = M.dashRoot(r.arabic)
     if r.gloss and r.gloss ~= "" then
-        text = text .. " — " .. r.gloss
+        text = text .. " · " .. r.gloss
     end
     return text
 end
@@ -185,7 +185,7 @@ function M.openPath(path)
     end)
     if not ver_ok or ver ~= M.SCHEMA_VERSION then
         pcall(function() conn:close() end)
-        return nil, _("Root database has an unsupported format — update the plugin or the data package.")
+        return nil, _("Root database has an unsupported format. Update the plugin or the data package.")
     end
     M._conn = conn
     M._db_path = path
@@ -196,7 +196,7 @@ end
 function M.ensureDb(quran)
     local path = M._db_path or M.findDb(quran)
     if not path then
-        return nil, _("Root data package not installed — get it from Library & assets in the Quran Explorer.")
+        return nil, _("Root data package not installed. Get it from Library & assets in the Quran Explorer.")
     end
     return M.openPath(path)
 end
@@ -268,7 +268,7 @@ function M.openMorphPath(path)
     end)
     if not ver_ok or ver ~= M.MORPH_SCHEMA_VERSION then
         pcall(function() conn:close() end)
-        return nil, _("Morphology database has an unsupported format — update the plugin or the data package.")
+        return nil, _("Morphology database has an unsupported format. Update the plugin or the data package.")
     end
     M._morph_conn = conn
     M._morph_path = path
@@ -684,7 +684,7 @@ local function headwordItem(browser, root, hws, idx, starred)
     local star = (starred and h.top3) and "★ " or ""
     local text = star .. (h.headword or "?")
     if h.gloss and h.gloss ~= "" then
-        text = text .. " — " .. h.gloss
+        text = text .. " · " .. h.gloss
     end
     local mand = h.quran_freq and h.quran_freq > 0 and ("×" .. h.quran_freq) or ""
     if h.form_no and h.form_no ~= "" then
@@ -766,7 +766,7 @@ function M.showRoot(browser, root, opts)
         local text = _("This word:") .. " " .. lead.headword
         local gloss = idx and hws[idx].gloss
         if gloss and gloss ~= "" then
-            text = text .. " — " .. gloss
+            text = text .. " · " .. gloss
         end
         table.insert(items, {
             text = text,
@@ -825,7 +825,7 @@ function M.occurrenceItems(order, expanded, disp, toggle, open_ayah)
             for _j, o in ipairs(g.occ) do
                 local text = disp(o.form_text)
                 if o.gloss ~= "" then
-                    text = text .. " — " .. o.gloss
+                    text = text .. " · " .. o.gloss
                 end
                 table.insert(items, {
                     text = text,
@@ -869,7 +869,7 @@ function M.showOccurrences(browser, root)
         return M.occurrenceItems(order, expanded, disp, toggle, openAyah)
     end
     browser:navigateForward(
-        string.format("%s — ×%d", M.dashRoot(root), total),
+        string.format("%s · ×%d", M.dashRoot(root), total),
         build(), nil, { multiline = true })
 end
 

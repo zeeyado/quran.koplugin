@@ -375,7 +375,7 @@ local function verifiedDownload(entry, dest)
     if entry.sha256 then
         if M.sha256File(dest) ~= entry.sha256 then
             os.remove(dest)
-            return nil, _("Checksum mismatch — the download was corrupted. Please try again.")
+            return nil, _("Checksum mismatch. The download was corrupted, please try again.")
         end
     end
     return true
@@ -638,21 +638,36 @@ local function booksDir(quran)
     return base .. "/Quran"
 end
 
--- Set of EPUB filenames present in the books folder and next to the
--- currently open book: {filename -> dir}.
+-- Set of EPUB filenames present in the books folder, the KOReader home
+-- folder root, and next to the currently open book: {filename -> dir}.
+-- ND-12 home-folder detection (owner soak note): books kept in the home
+-- root itself were invisible (only <home>/Quran was scanned), so Get
+-- books showed them as not installed. First hit wins, so the configured
+-- books folder stays the canonical target for Update/Delete. NOT
+-- widened to reading-history paths: test copies opened from elsewhere
+-- must stay unrecognized (owner 2026-07-22 scope directive).
 local function findInstalledBooks(quran)
     local lfs = require("libs/libkoreader-lfs")
     local found = {}
-    local dirs = { booksDir(quran) }
+    local dirs, seen_dirs = {}, {}
+    local function addDir(d)
+        if d and d ~= "" and not seen_dirs[d] then
+            seen_dirs[d] = true
+            table.insert(dirs, d)
+        end
+    end
+    addDir(booksDir(quran))
+    addDir(G_reader_settings
+        and G_reader_settings:readSetting("home_dir") or nil)
     local cur = quran.ui and quran.ui.document and quran.ui.document.file
     if cur then
-        table.insert(dirs, (cur:match("^(.*)/[^/]+$")))
+        addDir(cur:match("^(.*)/[^/]+$"))
     end
     for _i, dir in ipairs(dirs) do
-        if dir and lfs.attributes(dir, "mode") == "directory" then
+        if lfs.attributes(dir, "mode") == "directory" then
             pcall(function()
                 for entry in lfs.dir(dir) do
-                    if entry:match("%.epub$") then
+                    if entry:match("%.epub$") and not found[entry] then
                         found[entry] = dir
                     end
                 end
@@ -908,7 +923,7 @@ local function installData(item, after)
         logger.info("quran.koplugin: installed data package", entry.name, "v" .. entry.version)
         if after then after() end
         notify(_("Installed:") .. " " .. (DATA_LABELS[entry.name] or entry.name)
-            .. "\n" .. _("Ready to use — no restart needed."))
+            .. "\n" .. _("Ready to use. No restart needed."))
     end)
 end
 
@@ -1486,7 +1501,7 @@ function M.checkPluginUpdate(browser)
         local lfs = require("libs/libkoreader-lfs")
         if (lfs.symlinkattributes and lfs.symlinkattributes(quran.path, "mode") == "link")
             or lfs.attributes(quran.path .. "/.git", "mode") == "directory" then
-            notify("v" .. p.version .. " " .. _("is available, but this is a development install (symlink or git checkout) — update from the repository."), true)
+            notify("v" .. p.version .. " " .. _("is available, but this is a development install (symlink or git checkout). Update from the repository."), true)
             return
         end
         local UIManager = require("ui/uimanager")
@@ -1801,7 +1816,7 @@ local function buildLibraryItems(browser)
                 M._manifest = nil
                 M._catalog = nil
                 M.clearAssetCache()   -- drop the persisted books catalog too
-                notify(_("Catalogs cleared — they will be re-fetched on next use."))
+                notify(_("Catalogs cleared. They will be re-fetched on next use."))
             end,
         },
         {
@@ -1823,12 +1838,12 @@ function M.showSourceDialog(browser)
         if src == cur then return end
         M.setAssetSource(src)
         notify(src == "test"
-            and _("Downloads now come from the rolling test build — unvalidated CI assets, for testing only.")
+            and _("Downloads now come from the rolling test build: unvalidated CI assets, for testing only.")
             or _("Downloads now come from official releases."))
         browser:refreshScreen(buildLibraryItems(browser))
     end
     dialog = ButtonDialog:new{
-        title = _("Where dictionaries, data packages and books are downloaded from. The test build is the newest unreleased CI build — unvalidated, for beta testing only."),
+        title = _("Where dictionaries, data packages and books are downloaded from. The test build is the newest unreleased CI build: unvalidated, for beta testing only."),
         buttons = {
             {{
                 text = (cur == "official" and "✓ " or "") .. _("Official releases"),

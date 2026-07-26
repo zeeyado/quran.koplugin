@@ -611,13 +611,17 @@ package.preload["ui/widget/menu"] = function()
             end
             m.title_bar_left_icon = spec.title_bar_left_icon
             m.onLeftButtonTap = spec.onLeftButtonTap
+            -- ND-11/ND-18 surfaces
+            m.items_per_page = spec.items_per_page
+            m.return_button = { { width = 2 } }
             return m
         end,
     }
 end
 package.preload["device"] = function()
     return { screen = { getWidth = function() return 800 end,
-                        getHeight = function() return 1200 end } }
+                        getHeight = function() return 1200 end,
+                        scaleBySize = function(_, n) return n end } }
 end
 package.preload["ui/widget/infomessage"] = function()
     return { new = function(_, spec) return spec end }
@@ -754,6 +758,8 @@ local pos_items = _shown.item_table
 eq(_shown.title, "Surah77 77:33", "uap: position lands on the ayah page")
 eq(pos_items[1].text, "Translations", "uap: Translations row first (D-R3-3)")
 eq(pos_items[2].text, "Go to this ayah in the book", "uap: goto row")
+eq(pos_items[2].separator, true,
+    "d-r4-5: read/navigate band closes before the corpus rows")
 eq(pos_items[3].text, "Tafsir", "uap: tafsir row from installed dicts")
 eq(pos_items[4].text, "I'rab", "uap: irab row")
 eq(#pos_items, 6, "uap: 6 items (no asbab, no qul db here)")
@@ -871,6 +877,19 @@ do
         true, "assets: dicts.json fetches from the dict bucket")
     eq(asrc:find('"_catalog", booksBase() .. "/catalog.json"', 1, true) ~= nil,
         true, "assets: catalog.json fetches from the books home")
+    -- ND-12 home-folder detection: the install scan covers the home
+    -- root (books kept there read as not-installed before); first hit
+    -- wins so the configured books folder stays canonical; reading
+    -- history deliberately NOT scanned (owner 2026-07-22: test copies
+    -- opened elsewhere must stay unrecognized)
+    eq(asrc:find("addDir(G_reader_settings", 1, true) ~= nil, true,
+        "nd12-home: home root joins the install scan")
+    eq(asrc:find("and not found[entry] then", 1, true) ~= nil, true,
+        "nd12-home: first-found dir wins")
+    local fib = asrc:match("local function findInstalledBooks.-\nend")
+    eq(fib ~= nil, true, "nd12-home: scan function sliced")
+    eq(fib:find("readhistory"), nil,
+        "nd12-home: history stays out of install detection")
 end
 
 local merged = QAS.mergeDictState(
@@ -1485,6 +1504,13 @@ QB.show(bq, QA, function(b)
     b.menu:updatePageInfo()
     eq(b.menu.page_info_left_chev.enabled, false,
         "nd5: single-page list keeps the stock dimming")
+    -- ND-11: items-per-page derives from screen height (stub: 1200px,
+    -- identity scale -> 1200/48 = 25, capped at 22), no fixed 14
+    eq(b.menu.items_per_page, 22,
+        "nd11: per-page derived from screen height (capped)")
+    -- ND-18: the bottom-left ↑ is inset inboard off the curved corner
+    eq(b.menu.return_button[1].width, 18,
+        "nd18: return arrow inset off the corner")
 end)
 end
 
@@ -2381,7 +2407,7 @@ eq(single:find("Only text.", 1, true) ~= nil, true, "roots: definition still ren
 
 -- D-R2-1: shared root-list row shape (landing / letter / search)
 eq(QR.rootItemText({ arabic = "عذب", gloss = "Punishment" }),
-    "ع-ذ-ب — Punishment", "roots-row: dashed root + dominant gloss")
+    "ع-ذ-ب · Punishment", "roots-row: dashed root + dominant gloss")
 eq(QR.rootItemText({ arabic = "عذب" }), "ع-ذ-ب", "roots-row: glossless root bare")
 eq(QR.rootItemMandatory({ top_freq = 322, n = 23 }), "×322",
     "roots-row: Quran count on the right")
@@ -2697,7 +2723,7 @@ do
     bset.last_quran_book = nil
     bkq:_pickPreferredBook()
     eq(#bdlg.buttons, 2, "picker-empty: Browse + Cancel remain usable")
-    eq(bdlg.title, "No Quran books known yet — browse to pick one",
+    eq(bdlg.title, "No Quran books known yet. Browse to pick one",
         "picker-empty: honest title, no dead-end InfoMessage")
     UM.show = old_show
     G_reader_settings = old_grs
@@ -2925,7 +2951,7 @@ if have_db and sq3_ok then
     eq(nav_ri[2].mandatory, "1631", "roots-land: letter path counts all covered roots")
     eq(nav_ri[2].separator, true, "roots-land: paths separated from the ranking")
     eq(#nav_ri, 1254, "roots-land: 2 paths + 1252 ranked roots")
-    eq(nav_ri[3].text:find("ا%-ل%-ه — ") ~= nil, true,
+    eq(nav_ri[3].text:find("ا%-ل%-ه · ") ~= nil, true,
         "roots-land: top row = root + dominant gloss")
     eq(nav_ri[3].mandatory, "×2699", "roots-land: top row count")
 
@@ -2946,7 +2972,7 @@ if have_db and sq3_ok then
     eq(#nav_ri > 20, true, "roots-letters: alphabet listed")
     QR.showSearch(rbrowser, "عذب")
     eq(nav_rt, "Roots: عذب", "roots-search-screen: title carries the query")
-    eq(nav_ri[1].text:find("ع%-ذ%-ب — ") ~= nil, true,
+    eq(nav_ri[1].text:find("ع%-ذ%-ب · ") ~= nil, true,
         "roots-search-screen: shared row shape")
 
     -- single-entry root skips the entity screen, opens the entry itself
@@ -3022,7 +3048,7 @@ if have_db and sq3_ok then
         eq(mi[#mi].text, "Occurrences", "morph-entity: occurrences row present")
         eq(mi[#mi].mandatory, "×128 · 6 forms", "morph-entity: measured totals shown")
         mi[#mi].callback()
-        eq(mt, "ع-ظ-م — ×128", "morph-occ-screen: title carries the honest total")
+        eq(mt, "ع-ظ-م · ×128", "morph-occ-screen: title carries the honest total")
         eq(mo and mo.multiline, true, "morph-occ-screen: two-line rows")
         eq(#mi, 6, "morph-occ-screen: COLLAPSED by default — form headers only")
         eq(mi[1].bold, true, "morph-occ-screen: form header bolded")
@@ -3128,7 +3154,7 @@ do
         a_cov = 20, b_cov = 34, n_words = 10,
     }
     eq(sp.title, "Similar ayahs 2:255 ↔ 42:4", "pair-spec: title = the pair")
-    eq(sp.text:find("Matched wording — 69% · 10 matched words", 1, true) ~= nil,
+    eq(sp.text:find("Matched wording · 69% · 10 matched words", 1, true) ~= nil,
         true, "pair-spec: meta leads with % and word count")
     eq(sp.text:find("(20% of 2:255 · 34% of 42:4)", 1, true) ~= nil, true,
         "pair-spec: per-side coverage")
@@ -3146,7 +3172,7 @@ do
         kind = "meaning", score = 2, common_roots = 3,
         a = { surah = 2, ayah = 255 }, b = { surah = 3, ayah = 2 },
     }
-    eq(sp2.text:find("Related in meaning — QurSim · strong · 3 shared roots",
+    eq(sp2.text:find("Related in meaning · QurSim · strong · 3 shared roots",
         1, true) ~= nil, true, "pair-spec: meaning meta (strong + roots)")
     eq(sp2.title, "Similar ayahs 2:255 ↔ 3:2",
         "pair-spec: meaning pair titled")
@@ -3204,7 +3230,49 @@ if have_qul and sq3_ok then
         "qul-db: group occurrences listed")
     local counts = QQ.countsFor(qconn, 2, 23)
     eq(counts.similar, 1, "qul-db: countsFor similar")
-    eq(counts.phrases, 2, "qul-db: countsFor phrases")
+    -- ND-12: the count matches the CONSOLIDATED screen (raw = 2 groups)
+    eq(counts.phrases, 1, "qul-db: countsFor phrases = consolidated rows")
+
+    -- ND-12 phrase consolidation: QUL stores nested variants as
+    -- separate groups (2:30 "قال / وإذ": the same sentence twice);
+    -- nested ayah sets with overlapping anchor extents fold into the
+    -- wider-sharing group, anchors carry per-site extents
+    local con23 = QQ.phrasesForConsolidated(qconn, 2, 23)
+    eq(#con23, 1, "nd12-phr: 2:23 nested variant folds (2 raw groups)")
+    eq(con23[1].group_id, ph[1].group_id, "nd12-phr: widest sharing kept")
+    eq(con23[1].anchor_ayah, 23, "nd12-phr: anchor at the scoped ayah")
+    eq(con23[1].anchor_from ~= nil and con23[1].anchor_to ~= nil, true,
+        "nd12-phr: anchor extent recorded")
+    local con30 = QQ.phrasesForConsolidated(qconn, 2, 30)
+    eq(#con30, 1, "nd12-phr: the 2:30 repro shows ONE row")
+    eq(con30[1].count, 3, "nd12-phr: kept group is the ×3 core")
+    eq(con30[1].anchor_from, 1, "nd12-phr: site extent starts at w1 (وإذ)")
+    eq(con30[1].anchor_to, 4, "nd12-phr: site extent spans w1-4")
+    eq(#QQ.phrasesForConsolidated(qconn, 2, 255), 2,
+        "nd12-phr: different sharing sets do NOT merge (2:255)")
+    local raw18 = #QQ.phrasesInSurah(qconn, 18)
+    local con18 = #QQ.phrasesInSurahConsolidated(qconn, 18)
+    eq(raw18 > con18 and con18 > 30, true,
+        "nd12-phr: surah screen consolidates without collapsing")
+    -- pure: non-nested sets and other-ayah anchors never fold
+    local socc = {
+        [1] = { { surah = 1, ayah = 1, w_from = 1, w_to = 4 },
+                { surah = 9, ayah = 9, w_from = 2, w_to = 5 } },
+        [2] = { { surah = 1, ayah = 1, w_from = 2, w_to = 4 },
+                { surah = 7, ayah = 7, w_from = 1, w_to = 3 } },
+        [3] = { { surah = 1, ayah = 2, w_from = 1, w_to = 3 } },
+        [4] = { { surah = 1, ayah = 1, w_from = 2, w_to = 3 },
+                { surah = 9, ayah = 9, w_from = 1, w_to = 2 } },
+    }
+    local skept = QQ.consolidatePhraseGroups({
+        { group_id = 1, count = 2 }, { group_id = 2, count = 2 },
+        { group_id = 3, count = 1 }, { group_id = 4, count = 2 },
+    }, function(gid) return socc[gid] end, 1, nil)
+    eq(#skept, 3, "nd12-phr pure: subset folds; non-nested + other-ayah kept")
+    eq(skept[1].group_id == 1 and skept[2].group_id == 2
+        and skept[3].group_id == 3, true,
+        "nd12-phr pure: order preserved, g4 folded into g1")
+    eq(skept[3].anchor_ayah, 2, "nd12-phr pure: per-group anchor ayah")
 
     -- R3-F22: the phrase itself from the Hafs text (word-slice by the
     -- group's source positions; verified against the real db offsets)
@@ -3469,7 +3537,7 @@ if have_qul and sq3_ok then
     eq(cb_o and cb_o.multiline, true,
         "themes-collapse: two-line untruncated theme rows (D-R3-6)")
     eq(cb_i[1].bold, true, "themes-collapse: surah flow row bolded")
-    eq(cb_i[1].text:find("^1%. Surah1 — Read as one page") ~= nil, true,
+    eq(cb_i[1].text:find("^1%. Surah1 · Read as one page") ~= nil, true,
         "themes-collapse: surah leads with its read-as-one-page flow row")
     local n_flow, n_theme = 0, 0
     for _i, it in ipairs(cb_i) do
@@ -4274,6 +4342,10 @@ QRD.show{
     end } },
 }
 eq(_shown.title, "T", "reader-show: title")
+-- ND-8: the big window sizes like the koassistant viewer (screen minus
+-- a 30dp margin; stub screen 800x1200, identity scale)
+eq(_shown.width, 770, "nd8: viewer width = screen minus slim margin")
+eq(_shown.height, 1170, "nd8: viewer height = screen minus slim margin")
 local rrow = _shown.buttons_table[1]
 eq(#rrow, 4, "reader-show: close + prev/next + extra buttons")
 rrow[3].callback()
@@ -4691,6 +4763,22 @@ tset.quran_simple_mode = true
 eq(tgq:_popupButtonOn("readfull"), true,
     "r3-f17: Simple mode never strips popup buttons (defaults, not capability)")
 
+-- ND-4: the Settings text-layout row is a RADIO GROUP (the tap-cycle
+-- looked inert there: KOReader menu items don't re-render on tap); the
+-- reading windows' hamburger keeps the cycle knob
+do
+    local msrc4 = io.open(PLUGIN_DIR .. "/main.lua"):read("*a")
+    eq(msrc4:find("sub_item_table = readerLayoutItems()", 1, true) ~= nil,
+        true, "nd4: settings layout row opens a radio submenu")
+    eq(msrc4:find("local function readerLayoutItems", 1, true) ~= nil,
+        true, "nd4: radio builder present")
+    eq(msrc4:find("Tap to cycle", 1, true), nil,
+        "nd4: no tap-cycle wording left in settings")
+    local rsrc4 = io.open(PLUGIN_DIR .. "/quran_reader.lua"):read("*a")
+    eq(rsrc4:find("M.cycleTextLayout()", 1, true) ~= nil, true,
+        "nd4: reading windows keep the cycle knob")
+end
+
 -- _ayahDictKeys + _rawDefinition (extracted live): the dict-key
 -- convention and the one-call candidate-list fetch
 local kchunk = "local SURAH_NAMES = { [2] = 'Al-Baqarah' }\nlocal Quran = {}\n"
@@ -4767,7 +4855,7 @@ if have_qul and sq3_ok then
         if it.text and it.text:find("27:30", 1, true) then prev_item = it end
     end
     eq(prev_item ~= nil and prev_item.text:find(
-        " — Preview text for 27:30", 1, true) ~= nil, true,
+        " · Preview text for 27:30", 1, true) ~= nil, true,
         "r3-b4: similar rows carry a translation preview")
     dq._textModule = nil
 
@@ -4807,7 +4895,7 @@ if have_qul and sq3_ok then
         eq(simspec.title:find("1:1", 1, true) ~= nil
             and simspec.title:find("27:30", 1, true) ~= nil, true,
             "dense-sim: pair view titled with both loci")
-        eq(simspec.text:find("Matched wording — 80%", 1, true) ~= nil, true,
+        eq(simspec.text:find("Matched wording · 80%", 1, true) ~= nil, true,
             "dense-sim: similarity % leads the meta line")
         eq(simspec.text:find("«", 1, true) ~= nil, true,
             "dense-sim: marked overlap in the pair text")
@@ -4823,7 +4911,8 @@ if have_qul and sq3_ok then
             nav_title2, nav_items, nav_opts2 = t2, items, o2
         end
         QQ2.showMutashabihat(fb, 2, 23)
-        eq(#nav_items, 2, "dense-phr: 2:23's phrase groups listed")
+        -- ND-12: nested variants consolidated (2 raw groups, 1 row)
+        eq(#nav_items, 1, "dense-phr: 2:23's phrase groups listed consolidated")
         nav_items[1].callback()
         eq(nav_title2:find("×", 1, true) ~= nil, true,
             "dense-phr: occurrence screen titled phrase ×count")

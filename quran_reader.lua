@@ -238,10 +238,10 @@ M.paging_mode = "auto"
 M.PAGING_MODES = {
     { value = "auto", label = _("Match book"), short = _("match book"),
       help = _("Follows KOReader's 'Invert page turn taps and swipes' setting, so the plugin pages the same way as the book.") },
-    { value = "standard", label = _("Left to right — forward on the right"),
+    { value = "standard", label = _("Left to right (forward on the right)"),
       short = _("left to right"),
       help = _("Tap the right half, swipe left, or use ▶ for the next page/entry. Like an English book.") },
-    { value = "inverted", label = _("Right to left — forward on the left"),
+    { value = "inverted", label = _("Right to left (forward on the left)"),
       short = _("right to left"),
       help = _("Tap the left half, swipe right, or use ◀ for the next page/entry. Like the mushaf.") },
     { value = "content", label = _("Follow content"),
@@ -713,8 +713,11 @@ function M.show(spec)
     viewer = TextViewer:new{
         title = spec.title,
         text = spec.text,
-        width = Screen:getWidth(),
-        height = Screen:getHeight(),
+        -- ND-8 (owner): the big reading window sizes like the
+        -- koassistant viewer — screen minus a slim margin, so it reads
+        -- as a floating window over the page instead of a mode switch
+        width = Screen:getWidth() - Screen:scaleBySize(30),
+        height = Screen:getHeight() - Screen:scaleBySize(30),
         justified = M.text_layout == "justify",
         auto_para_direction = not forced,
         para_direction_rtl = forced and M.text_layout == "rtl" or nil,

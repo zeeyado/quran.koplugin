@@ -860,7 +860,7 @@ function M._panelRegistry(quran)
                     if q.openBookAt then q:openBookAt() end
                 end),
                 hold_callback = function()
-                    H.notifyWarn(_("Open your preferred Quran book — connections and go-to land there."))
+                    H.notifyWarn(_("Open your preferred Quran book. Connections and go-to land there."))
                 end }
         end }
 
@@ -877,7 +877,7 @@ function M._panelRegistry(quran)
                     end)
                 end),
                 hold_callback = function()
-                    H.notifyWarn(_("This surah in the Explorer — go to it, overview, ayah list."))
+                    H.notifyWarn(_("This surah in the Explorer: go to it, overview, ayah list."))
                 end }
         end }
 

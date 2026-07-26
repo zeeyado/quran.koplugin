@@ -382,6 +382,9 @@ function Browser:showAyahPage(surah, hafs_ayah, opts)
                 or hafs_ayah
             self:gotoAyah(surah, book_a)
         end,
+        -- D-R4-5 (widened): the ayah page bands like the hub —
+        -- read/navigate · corpus · connections · surah context
+        separator = true,
     })
     local res = actions.detectResources(quran)
     -- R3-F19: a resource row with NO entry for this ayah is dimmed and
@@ -744,8 +747,8 @@ function Browser:buildSurahItems(surah)
     connRow(_("Similar ayahs"), n_similar, function()
         qul.showSimilarBySurah(self, surah)
     end)
-    local n_phrases = conn and qul.phrasesInSurah
-        and #qul.phrasesInSurah(conn, surah) or 0
+    local n_phrases = conn and qul.phrasesInSurahConsolidated
+        and #qul.phrasesInSurahConsolidated(conn, surah) or 0
     connRow(_("Repeated phrases (mutashabihat)"), n_phrases, function()
         qul.showPhrasesInSurah(self, surah)
     end)
@@ -1316,6 +1319,16 @@ function M.show(quran, actions, land)
         single_line = true,
         items_font_size = 18,
         items_mandatory_font_size = 14,
+        -- ND-11: stock Menu renders a FIXED 14 rows and STRETCHES them
+        -- over the screen, so tall phone screens get comically tall
+        -- rows instead of more of them. Derive the count from physical
+        -- height (~48dp per row), floor 14 (the stock look on small
+        -- e-ink), cap 22; a user's global items_per_page still wins.
+        items_per_page = (G_reader_settings
+            and G_reader_settings:readSetting("items_per_page"))
+            or math.min(22, math.max(14, math.floor(
+                Screen:getHeight() / (Screen.scaleBySize
+                    and Screen:scaleBySize(48) or 86)))),
         -- R3-F21 (owner batch 4): the hamburger is a settings-led
         -- context menu — paging direction is ONE row that opens the
         -- paging submenu, not the menu itself (it led every screen,
@@ -1370,6 +1383,16 @@ function M.show(quran, actions, land)
         -- NOTE: no close_callback — Menu:onMenuSelect fires it after every
         -- item tap (X-ray browser lesson); cleanup lives in onCloseWidget.
     }
+    -- ND-18: on phones with curved bottom corners the bottom-left ↑
+    -- sits in the dead zone — inset it inboard (the arrow keeps its
+    -- slot, just no longer glued to the corner)
+    do
+        local rb = Browser.menu.return_button
+        if rb and rb[1] and rb[1].width then
+            rb[1].width = Screen.scaleBySize
+                and Screen:scaleBySize(18) or 24
+        end
+    end
     -- ND-5: closed lists cycle. Stock Menu wraps last→first on SWIPES
     -- ("cycle for swipes only") but dims the ‹ › chevrons at the ends,
     -- so the same action looks dead as a button while a swipe still

@@ -66,7 +66,7 @@ function M.openPath(path)
     end)
     if not ver_ok or ver ~= M.SCHEMA_VERSION then
         pcall(function() conn:close() end)
-        return nil, _("Quran text database has an unsupported format — update the plugin or the data package.")
+        return nil, _("Quran text database has an unsupported format. Update the plugin or the data package.")
     end
     M._conn = conn
     M._db_path = path
@@ -77,7 +77,7 @@ end
 function M.ensureDb(quran)
     local path = M._db_path or M.findDb(quran)
     if not path then
-        return nil, _("Quran text package not installed — get it from Library & assets in the Quran Explorer.")
+        return nil, _("Quran text package not installed. Get it from Library & assets in the Quran Explorer.")
     end
     return M.openPath(path)
 end

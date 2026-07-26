@@ -50,7 +50,7 @@ local STORY_LABELS = {
     ["nuh-flood"] = _("Nuh & the Flood"),
     ["yusuf"] = _("Yusuf"),
     ["kahf"] = _("Stories of Al-Kahf"),
-    ["musa-early"] = _("Musa — early life"),
+    ["musa-early"] = _("Musa · early life"),
     ["sulayman-bilqis"] = _("Sulayman & Bilqis"),
     ["luqman-wisdom"] = _("Luqman"),
 }
@@ -188,7 +188,7 @@ function M.renderFigureText(f)
     if f.named_in_quran == 0 then
         local line = _("Not named in the Quran")
         if f.quranic_name and f.quranic_name ~= "" then
-            line = line .. " — " .. _("Quranic designation:") .. " "
+            line = line .. " · " .. _("Quranic designation:") .. " "
                 .. f.quranic_name
         end
         if f.tradition_name and f.tradition_name ~= "" then
@@ -271,7 +271,7 @@ function M.openPath(path)
     end)
     if not ver_ok or ver ~= M.SCHEMA_VERSION then
         pcall(function() conn:close() end)
-        return nil, _("Connections database has an unsupported format — update the plugin or the data package.")
+        return nil, _("Connections database has an unsupported format. Update the plugin or the data package.")
     end
     M._conn = conn
     M._db_path = path
@@ -282,7 +282,7 @@ end
 function M.ensureDb(quran)
     local path = M._db_path or M.findDb(quran)
     if not path then
-        return nil, _("Connections data package not installed — get it from Library & assets in the Quran Explorer.")
+        return nil, _("Connections data package not installed. Get it from Library & assets in the Quran Explorer.")
     end
     return M.openPath(path)
 end

@@ -1946,7 +1946,7 @@ function Quran:_pickPreferredBook(then_cb)
     } })
     dialog = ButtonDialog:new{
         title = #files > 0 and _("Choose your Quran book")
-            or _("No Quran books known yet — browse to pick one"),
+            or _("No Quran books known yet. Browse to pick one"),
         title_align = "center",
         buttons = rows,
     }
@@ -2430,6 +2430,11 @@ end
 function Quran:openAyahPopup(surah, ayah)
     local name = SURAH_NAMES[surah]
     if not name or not self.ui or not self.ui.dictionary then return end
+    -- ND-12 diagnostic: the popup rides the stock lookup pipeline whose
+    -- "Searching…" info is dismissable — a trailing tap can cancel it
+    -- silently (suspected cause of the intermittent no-open). This line
+    -- proves the request fired when the popup then fails to appear.
+    logger.info("quran.koplugin: ayah popup lookup", surah, ayah)
     self._last_ayah_surah = surah
     self._last_ayah_num = ayah
     DictQuickLookup._quran_next_lookup = true
@@ -2440,6 +2445,7 @@ end
 function Quran:openSurahOverviewPopup(surah)
     local name = SURAH_NAMES[surah]
     if not name or not self.ui or not self.ui.dictionary then return end
+    logger.info("quran.koplugin: overview popup lookup", surah)
     self._last_overview_surah = surah
     DictQuickLookup._quran_next_lookup = true
     self.ui.dictionary:onLookupWord(name)
@@ -3051,7 +3057,7 @@ function Quran:showQuranDictOrder()
     end
     if #quran_names < 2 then
         UIManager:show(InfoMessage:new{
-            text = _("Fewer than two enabled Quran dictionaries — nothing to reorder."),
+            text = _("Fewer than two enabled Quran dictionaries. Nothing to reorder."),
         })
         return
     end
@@ -3062,7 +3068,7 @@ function Quran:showQuranDictOrder()
         local idx = self:_dictIdxPath(name)
         if not idx then
             UIManager:show(InfoMessage:new{
-                text = _("Could not resolve every dictionary file — order left unchanged."),
+                text = _("Could not resolve every dictionary file. Order left unchanged."),
             })
             return
         end
@@ -3147,7 +3153,7 @@ function Quran:_showTranslationOrder(all)
     if #ordered < 2 then
         local InfoMessage = require("ui/widget/infomessage")
         UIManager:show(InfoMessage:new{
-            text = _("Fewer than two enabled translations — nothing to reorder."),
+            text = _("Fewer than two enabled translations. Nothing to reorder."),
         })
         return
     end
@@ -3332,7 +3338,7 @@ function Quran:_showTafsirPicker(surah, ayah, opts)
         end,
     } })
     self._tafsir_picker = ButtonDialog:new{
-        title = _("Read tafsir — your pick becomes the default"),
+        title = _("Read tafsir. Your pick becomes the default."),
         title_align = "center",
         buttons = rows,
         tap_close_callback = function() quran._tafsir_picker = nil end,
@@ -4465,7 +4471,7 @@ function Quran:restoreBookData()
     local migrated, found = self:_migrateSidecarsInDir(dir, skip)
     local msg
     if not self:_renameMap() then
-        msg = _("Rename map missing — reinstall the plugin.")
+        msg = _("Rename map missing. Reinstall the plugin.")
     elseif found == 0 then
         msg = _("No old reading data found for renamed books in this folder.")
     else
@@ -4652,6 +4658,38 @@ function Quran:addToMainMenu(menu_items)
         return items
     end
 
+    -- ND-4: the tap-cycle layout control can't live in a KOReader menu
+    -- (items don't re-render on tap, so the cycling looked inert) — the
+    -- Settings row becomes a radio group like Paging direction; the
+    -- reading windows' hamburger keeps the cycle knob.
+    local function readerLayoutItems()
+        local reader = self:_readerModule()
+        local modes = (reader and reader.LAYOUT_MODES) or {}
+        local function save(value)
+            if reader and reader.setTextLayout then
+                reader.setTextLayout(value)
+            else
+                self.settings:saveSetting("reader_text_layout", value)
+                self.settings:flush()
+            end
+        end
+        local items = {}
+        for _i, m in ipairs(modes) do
+            table.insert(items, {
+                text = m.label,
+                checked_func = function()
+                    local cur = reader and reader.text_layout
+                        or self.settings:readSetting(
+                            "reader_text_layout", "auto")
+                    return cur == m.value
+                end,
+                radio = true,
+                callback = function() save(m.value) end,
+            })
+        end
+        return items
+    end
+
     -- D-R3-19: this menu is built in BOTH contexts — the FileManager
     -- instance (no document, ever) gets the bookless shape below (the
     -- browser is the entry; the book-scoped panel row is dropped
@@ -4711,14 +4749,8 @@ function Quran:addToMainMenu(menu_items)
                                     "reader_text_layout", "auto")
                             return _("Reading text layout: ") .. label
                         end,
-                        help_text = _("Tap to cycle: automatic (each paragraph by its own text) → right to left → left to right → justified. Applies to the plugin's reading windows; also in their title-bar menu."),
-                        keep_menu_open = true,
-                        callback = function()
-                            local reader = self:_readerModule()
-                            if reader and reader.cycleTextLayout then
-                                reader.cycleTextLayout()
-                            end
-                        end,
+                        help_text = _("How text sits in the plugin's reading windows: automatic (each paragraph by its own text), forced right to left or left to right, or justified. The reading windows' title-bar menu cycles the same setting."),
+                        sub_item_table = readerLayoutItems(),
                     },
                 },
             },
@@ -4759,8 +4791,8 @@ function Quran:addToMainMenu(menu_items)
                                 }
                             end
                             return {
-                                item("card", _("Ayah card — connections & reading"),
-                                    _("A compact launcher: translations, tafsir, and this ayah's connections with counts — the same rows every time (default).")),
+                                item("card", _("Ayah card · connections & reading"),
+                                    _("A compact launcher: translations, tafsir, and this ayah's connections with counts. The same rows every time (default).")),
                                 item("popup", _("Resources popup"),
                                     _("The multi-dictionary popup with every ayah-keyed resource.")),
                                 item("tafsir", _("Preferred tafsir"),
@@ -4952,7 +4984,7 @@ function Quran:addToMainMenu(menu_items)
                 sub_item_table = {
                     {
                         text = _("In-book marking"),
-                        help_text = _("Mark ayahs on the page by connection layer — repeated phrases (mutashabihat), themes, similar ayahs. View-only: nothing is saved into your annotations. Toggles also live in the quick panel."),
+                        help_text = _("Mark ayahs on the page by connection layer: repeated phrases (mutashabihat), themes, similar ayahs. View-only: nothing is saved into your annotations. Toggles also live in the quick panel."),
                         sub_item_table = (function()
                             local items = {}
                             local marks = self:_marksModule()
@@ -5005,7 +5037,7 @@ function Quran:addToMainMenu(menu_items)
                             -- tweak); also a quick-panel chip
                             table.insert(items, {
                                 text = _("Theme headings in the text"),
-                                help_text = _("Shows each theme's heading between its ayah group, Clear-Quran style — injected while reading, per book, no rebuild. Toggling re-renders the book once. Needs the qul data package; works on ayah-per-paragraph layouts."),
+                                help_text = _("Shows each theme's heading between its ayah group, Clear-Quran style: injected while reading, per book, no rebuild. Toggling re-renders the book once. Needs the qul data package; works on ayah-per-paragraph layouts."),
                                 separator = true,
                                 checked_func = function()
                                     local bands = self:_bandsModule()
@@ -5055,7 +5087,7 @@ function Quran:addToMainMenu(menu_items)
                             end
                             return {
                                 item(80, _("Strong matches only"),
-                                    _("Pairs with match score 80 or higher — the wording genuinely recurs (default).")),
+                                    _("Pairs with match score 80 or higher: the wording genuinely recurs (default).")),
                                 item(0, _("All matches"),
                                     _("Every recorded pair, including weak word-overlap matches.")),
                             }
@@ -5124,7 +5156,7 @@ function Quran:addToMainMenu(menu_items)
                     },
                     {
                         text = _("Show hizb quarter (rub' al-hizb)"),
-                        help_text = _("Marks the quarter within the hizb — ۞ ¼ · ½ · ¾ (nothing at the hizb start). Requires 'Show hizb'."),
+                        help_text = _("Marks the quarter within the hizb: ۞ ¼ · ½ · ¾ (nothing at the hizb start). Requires 'Show hizb'."),
                         enabled_func = function()
                             return HIZB_FEATURE_ENABLED
                                 and self.settings:isTrue("show_hizb_in_footer")
@@ -5141,7 +5173,7 @@ function Quran:addToMainMenu(menu_items)
                     },
                     {
                         text = _("Show ruku (ع)"),
-                        help_text = _("Shows the ruku — the ع reading unit, numbered within the surah — in the status bar."),
+                        help_text = _("Shows the ruku (the ع reading unit, numbered within the surah) in the status bar."),
                         checked_func = function()
                             return self.settings:isTrue("show_ruku_in_footer")
                         end,
@@ -5187,7 +5219,7 @@ function Quran:addToMainMenu(menu_items)
                 sub_item_table = {
                     {
                         text = _("Show header bar"),
-                        help_text = _("Shows surah name (left) and juz info (right) at the top of the page. This is an overlay — adjust the book's top margin to avoid overlap."),
+                        help_text = _("Shows surah name (left) and juz info (right) at the top of the page. This is an overlay. Adjust the book's top margin to avoid overlap."),
                         checked_func = function()
                             return self.settings:isTrue("show_header_overlay")
                         end,
@@ -5207,7 +5239,7 @@ function Quran:addToMainMenu(menu_items)
                     },
                     {
                         text = _("Show juz"),
-                        help_text = _("Shows the current juz on the right of the header bar. Turn off to keep only hizb / rub' — e.g. if juz detection is off for a book."),
+                        help_text = _("Shows the current juz on the right of the header bar. Turn off to keep only hizb / rub', e.g. if juz detection is off for a book."),
                         enabled_func = function()
                             return self.settings:isTrue("show_header_overlay")
                         end,
@@ -5269,7 +5301,7 @@ function Quran:addToMainMenu(menu_items)
                     },
                     {
                         text = _("Show hizb quarter (rub' al-hizb)"),
-                        help_text = _("Marks the quarter within the hizb — ۞ ¼ · ½ · ¾ (nothing at the hizb start). Requires 'Show hizb'."),
+                        help_text = _("Marks the quarter within the hizb: ۞ ¼ · ½ · ¾ (nothing at the hizb start). Requires 'Show hizb'."),
                         enabled_func = function()
                             return HIZB_FEATURE_ENABLED
                                 and self.settings:isTrue("show_header_overlay")
@@ -5287,7 +5319,7 @@ function Quran:addToMainMenu(menu_items)
                     },
                     {
                         text = _("Show ruku (ع)"),
-                        help_text = _("Appends the ruku — the ع reading unit, numbered within the surah — on the right of the header bar."),
+                        help_text = _("Appends the ruku (the ع reading unit, numbered within the surah) on the right of the header bar."),
                         enabled_func = function()
                             return self.settings:isTrue("show_header_overlay")
                         end,
@@ -5434,7 +5466,7 @@ function Quran:addToMainMenu(menu_items)
                                 or _("not set")
                             return _("Preferred Quran book: ") .. label
                         end,
-                        help_text = _("The book bookless jumps open — going to an ayah from the file manager's Quran Explorer opens this book there. Picked on first use from your last-opened Quran book, the books folder, and reading history; change it here any time (your other editions stay one tap away in the same picker)."),
+                        help_text = _("The book bookless jumps open. Going to an ayah from the file manager's Quran Explorer opens this book there. Picked on first use from your last-opened Quran book, the books folder, and reading history; change it here any time (your other editions stay one tap away in the same picker)."),
                         callback = function()
                             self:_pickPreferredBook()
                         end,

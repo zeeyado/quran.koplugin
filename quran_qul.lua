@@ -109,7 +109,7 @@ function M.openPath(path)
     end)
     if not ver_ok or ver ~= M.SCHEMA_VERSION then
         pcall(function() conn:close() end)
-        return nil, _("QUL database has an unsupported format — update the plugin or the data package.")
+        return nil, _("QUL database has an unsupported format. Update the plugin or the data package.")
     end
     M._conn = conn
     M._db_path = path
@@ -120,7 +120,7 @@ end
 function M.ensureDb(quran)
     local path = M._db_path or M.findDb(quran)
     if not path then
-        return nil, _("QUL data package not installed — get it from Library & assets in the Quran Explorer.")
+        return nil, _("QUL data package not installed. Get it from Library & assets in the Quran Explorer.")
     end
     return M.openPath(path)
 end
@@ -577,6 +577,91 @@ function M.phrasesInSurah(conn, surah)
     return out
 end
 
+--- ND-12 (owner 2026-07-26): QUL stores nested phrase variants as
+-- separate groups: a core wording shared by N ayahs plus longer
+-- variants shared by fewer. Anchored at one ayah those render as
+-- near-duplicate rows (the 2:30 "قال / وإذ" repro: the same sentence
+-- twice). PURE consolidation: a group folds into an earlier keeper
+-- (groups arrive count DESC, so wider sharing comes first) when both
+-- anchor at the same ayah, their anchor word ranges overlap, and its
+-- occurrence ayah set is contained in the keeper's. Nothing is lost:
+-- the longer shared wording still shows through the keeper's
+-- per-occurrence «» extents. Kept groups gain anchor_surah/anchor_ayah/
+-- anchor_from/anchor_to (their own occurrence extent at the anchor) so
+-- rows can show the phrase as it reads AT this site.
+-- occ_of(group_id) -> that group's occurrence list.
+function M.consolidatePhraseGroups(groups, occ_of, anchor_surah, anchor_ayah)
+    local kept = {}
+    for _i, g in ipairs(groups) do
+        local occ = occ_of(g.group_id) or {}
+        local aset, a_occ = {}, nil
+        for _j, o in ipairs(occ) do
+            aset[o.surah * 1000 + o.ayah] = true
+            if not a_occ and o.surah == anchor_surah
+                    and (not anchor_ayah or o.ayah == anchor_ayah) then
+                a_occ = o
+            end
+        end
+        local merged = false
+        if a_occ and a_occ.w_from and a_occ.w_to then
+            for _k, k in ipairs(kept) do
+                if k.anchor_ayah == a_occ.ayah
+                        and k.anchor_from and k.anchor_to
+                        and a_occ.w_from <= k.anchor_to
+                        and k.anchor_from <= a_occ.w_to then
+                    local subset = true
+                    for key in pairs(aset) do
+                        if not k._aset[key] then subset = false break end
+                    end
+                    if subset then merged = true break end
+                end
+            end
+        end
+        if not merged then
+            g.anchor_surah = a_occ and a_occ.surah or nil
+            g.anchor_ayah = a_occ and a_occ.ayah or nil
+            g.anchor_from = a_occ and a_occ.w_from or nil
+            g.anchor_to = a_occ and a_occ.w_to or nil
+            g._aset = aset
+            table.insert(kept, g)
+        end
+    end
+    for _i, g in ipairs(kept) do g._aset = nil end
+    return kept
+end
+
+-- Every occurrence of every group touching the scope, ONE query (the
+-- consolidator needs full ayah sets; per-group queries would make the
+-- surah screen O(groups)).
+local function phraseOccMap(conn, surah, ayah)
+    local sql = [[
+        SELECT po.group_id, po.surah, po.ayah, po.w_from, po.w_to
+        FROM phrase_occ po
+        WHERE po.group_id IN (SELECT DISTINCT group_id FROM phrase_occ
+            WHERE surah = ?]] .. (ayah and " AND ayah = ?" or "") .. [[)
+        ORDER BY po.group_id, po.surah, po.ayah]]
+    local map = {}
+    for _i, r in ipairs(rows(conn, sql, ayah and { surah, ayah } or { surah })) do
+        local gid = tonumber(r[1])
+        map[gid] = map[gid] or {}
+        table.insert(map[gid], { surah = tonumber(r[2]), ayah = tonumber(r[3]),
+            w_from = tonumber(r[4]), w_to = tonumber(r[5]) })
+    end
+    return map
+end
+
+function M.phrasesForConsolidated(conn, surah, ayah)
+    local map = phraseOccMap(conn, surah, ayah)
+    return M.consolidatePhraseGroups(M.phrasesFor(conn, surah, ayah),
+        function(gid) return map[gid] end, surah, ayah)
+end
+
+function M.phrasesInSurahConsolidated(conn, surah)
+    local map = phraseOccMap(conn, surah)
+    return M.consolidatePhraseGroups(M.phrasesInSurah(conn, surah),
+        function(gid) return map[gid] end, surah, nil)
+end
+
 -- Per-ayah connection counts for the position screen (one cheap query).
 function M.countsFor(conn, surah, ayah, min_score)
     min_score = min_score or 0
@@ -593,8 +678,14 @@ function M.countsFor(conn, surah, ayah, min_score)
           (SELECT count(DISTINCT group_id) FROM phrase_occ WHERE surah = ?1 AND ayah = ?2)
     ]], { surah, ayah, min_score })[1]
     if not r then return nil end
+    -- phrases: the raw group count over-reports (nested QUL variants
+    -- consolidate on the list screen); count what the screen shows
+    local n_phrases = tonumber(r[4])
+    if n_phrases and n_phrases > 1 then
+        n_phrases = #M.phrasesForConsolidated(conn, surah, ayah)
+    end
     return { similar = tonumber(r[1]), themes = tonumber(r[2]),
-        topics = tonumber(r[3]), phrases = tonumber(r[4]) }
+        topics = tonumber(r[3]), phrases = n_phrases }
 end
 
 -- ---------------------------------------------------------------------
@@ -656,7 +747,7 @@ function M.similarPairSpec(d)
     end
     local meta
     if d.kind == "meaning" then
-        meta = _("Related in meaning") .. " — QurSim"
+        meta = _("Related in meaning") .. " · QurSim"
             .. ((d.score or 1) >= 2 and (" · " .. _("strong")) or "")
         if d.common_roots and d.common_roots > 0 then
             meta = meta .. " · " .. d.common_roots .. " "
@@ -673,7 +764,7 @@ function M.similarPairSpec(d)
         -- "matched", not "shared": QUL's matcher tolerates inflection
         -- (1:6 ٱهۡدِنَا matches 37:118 وَهَدَيۡنَٰهُمَا) — the marks
         -- are near-verbatim runs, not byte-identical wording
-        meta = string.format("%s — %d%%", _("Matched wording"), d.score or 0)
+        meta = string.format("%s · %d%%", _("Matched wording"), d.score or 0)
         if d.n_words and d.n_words > 0 then
             meta = meta .. string.format(" · %d %s", d.n_words,
                 _("matched words"))
@@ -705,7 +796,7 @@ function M.similarPairSpec(d)
             d.kind == "phrase" and _("Repeated phrase") or _("Similar ayahs"),
             d.a.surah, d.a.ayah, d.b.surah, d.b.ayah),
         text = meta .. "\n\n" .. section(d.a, d.a_runs)
-            .. "\n\n———\n\n" .. section(d.b, d.b_runs),
+            .. "\n\n· · ·\n\n" .. section(d.b, d.b_runs),
     }
 end
 
@@ -921,7 +1012,15 @@ end
 local function phraseGroupItem(browser, conn, g, origin)
     local quran = browser.quran
     local gid = g.group_id
-    local ptext = M.phraseText(quran, g)
+    -- site-true row text: the phrase as it reads at the anchor ayah
+    -- (its per-site extent), falling back to the group's source slice
+    local ptext
+    if g.anchor_surah and g.anchor_ayah and g.anchor_from and g.anchor_to then
+        local qt, tconn = textConn(quran)
+        local raw = qt and ayahArabic(qt, tconn, g.anchor_surah, g.anchor_ayah)
+        ptext = raw and M.sliceWords(raw, g.anchor_from, g.anchor_to)
+    end
+    ptext = ptext or M.phraseText(quran, g)
     local function disp(s)
         return (s and quran.displayArabic) and quran:displayArabic(s) or s
     end
@@ -953,7 +1052,7 @@ local function phraseGroupItem(browser, conn, g, origin)
                 local pv = qt and transPreview(quran, qt, tconn, o.surah, o.ayah, 70)
                 local text = ctx
                     or string.format("%s %d:%d", name, o.surah, o.ayah)
-                if pv then text = text .. " — " .. pv end
+                if pv then text = text .. " · " .. pv end
                 local b_idx = _j
                 table.insert(oitems, {
                     text = text,
@@ -1058,7 +1157,7 @@ function M.showSimilar(browser, surah, ayah)
         local pv = transPreview(quran, qt, tconn, m.surah, m.ayah, 90)
         local text = locus
         if ov then text = text .. "  «" .. ov .. "»" end
-        if pv then text = text .. " — " .. pv end
+        if pv then text = text .. " · " .. pv end
         local mand
         if m.kind == "meaning" then
             -- the semantic layer: wording % gives way to a "meaning"
@@ -1194,7 +1293,7 @@ function M.showThemesBrowse(browser)
                 or ("Surah " .. s)
             local flow_list = list
             table.insert(items, {
-                text = string.format("%d. %s — %s \226\134\146", s, name,
+                text = string.format("%d. %s · %s \226\134\146", s, name,
                     _("Read as one page")),
                 bold = true,
                 callback = function()
@@ -1450,7 +1549,7 @@ end
 function M.showMutashabihat(browser, surah, ayah)
     local conn, err = M.ensureDb(browser.quran)
     if not conn then notifyWarn(err) return end
-    local groups = M.phrasesFor(conn, surah, ayah)
+    local groups = M.phrasesForConsolidated(conn, surah, ayah)
     if #groups == 0 then
         notifyWarn(_("No repeated phrases recorded here."))
         return
@@ -1515,7 +1614,7 @@ end
 function M.showPhrasesInSurah(browser, surah)
     local conn, err = M.ensureDb(browser.quran)
     if not conn then notifyWarn(err) return end
-    local groups = M.phrasesInSurah(conn, surah)
+    local groups = M.phrasesInSurahConsolidated(conn, surah)
     if #groups == 0 then
         notifyWarn(_("No repeated phrases recorded in this surah."))
         return
