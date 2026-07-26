@@ -2427,18 +2427,46 @@ end
 -- contrast _lookupAyah below, which updates an existing popup in place).
 -- surah is book-space; ayah must already be the Hafs number that keys the
 -- dictionaries (caller converts via _warshToHafs).
+--- ND-12 (owner: intermittent no-open, device only): the stock
+-- lookup's progress InfoMessage doubles as Trapper's TRAP WIDGET, so
+-- any tap while sdcv runs CANCELS the whole lookup silently. Desktop
+-- sdcv finishes in milliseconds; on device storage the window is wide
+-- enough that the tail of the launching tap (or an impatient second
+-- tap) lands inside it. These popups were explicitly requested, so
+-- their one lookup runs with the progress message DISARMED (its tap
+-- and key handlers cleared). Stock text-selection lookups keep
+-- cancel-by-tap, the case that behavior was designed for.
+function Quran:_stickyLookup(key)
+    local dictionary = self.ui and self.ui.dictionary
+    if not dictionary then return end
+    local orig_show = dictionary.showLookupInfo
+    if orig_show then
+        dictionary.showLookupInfo = function(self_dict, word, show_delay)
+            orig_show(self_dict, word, show_delay)
+            local msg = self_dict.lookup_progress_msg
+            if msg then
+                msg.key_events = {}
+                msg.ges_events = {}
+            end
+        end
+    end
+    -- the wrapped showLookupInfo is consumed synchronously before the
+    -- lookup coroutine first yields, so restoring right after is safe
+    local ok, err = pcall(dictionary.onLookupWord, dictionary, key)
+    if orig_show then dictionary.showLookupInfo = orig_show end
+    if not ok then
+        logger.warn("quran.koplugin: sticky lookup failed", err)
+    end
+end
+
 function Quran:openAyahPopup(surah, ayah)
     local name = SURAH_NAMES[surah]
     if not name or not self.ui or not self.ui.dictionary then return end
-    -- ND-12 diagnostic: the popup rides the stock lookup pipeline whose
-    -- "Searching…" info is dismissable — a trailing tap can cancel it
-    -- silently (suspected cause of the intermittent no-open). This line
-    -- proves the request fired when the popup then fails to appear.
     logger.info("quran.koplugin: ayah popup lookup", surah, ayah)
     self._last_ayah_surah = surah
     self._last_ayah_num = ayah
     DictQuickLookup._quran_next_lookup = true
-    self.ui.dictionary:onLookupWord(name .. " " .. ayah)
+    self:_stickyLookup(name .. " " .. ayah)
 end
 
 --- Open a FRESH surah-overview popup (quick panel / gesture path).
@@ -2448,7 +2476,7 @@ function Quran:openSurahOverviewPopup(surah)
     logger.info("quran.koplugin: overview popup lookup", surah)
     self._last_overview_surah = surah
     DictQuickLookup._quran_next_lookup = true
-    self.ui.dictionary:onLookupWord(name)
+    self:_stickyLookup(name)
 end
 
 --- Navigate to a specific ayah. Updates the popup in-place.
@@ -2482,8 +2510,9 @@ function Quran:_lookupAyah(surah, ayah, dict_popup)
     -- Signal showDict to update this popup in-place
     DictQuickLookup._quran_update_popup = dict_popup
 
-    -- Trigger lookup through normal pipeline
-    self.ui.dictionary:onLookupWord(key)
+    -- Trigger lookup through normal pipeline (sticky: in-popup nav is
+    -- an explicit request too, a stray tap must not cancel it)
+    self:_stickyLookup(key)
 end
 
 --- Navigate to a specific surah overview. Updates the popup in-place.
@@ -2510,8 +2539,8 @@ function Quran:_lookupSurah(surah, dict_popup)
     -- Signal showDict to update this popup in-place
     DictQuickLookup._quran_update_popup = dict_popup
 
-    -- Trigger lookup through normal pipeline
-    self.ui.dictionary:onLookupWord(name)
+    -- Trigger lookup through normal pipeline (sticky, as in _lookupAyah)
+    self:_stickyLookup(name)
 end
 
 --- Common setup for all Quran custom popups.

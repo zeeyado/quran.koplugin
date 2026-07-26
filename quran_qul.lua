@@ -462,10 +462,13 @@ function M.sliceWords(text, from, to)
     return table.concat(words, " ", from, to)
 end
 
---- Pure: mark 1-based [from,to] word runs with «…» — the shared-wording
--- inline highlight (D-R3-14 display half; TextViewer has no rich text,
--- so the marks ARE the highlight). Out-of-range runs are skipped; the
--- text is otherwise unchanged.
+--- Pure: mark 1-based [from,to] word runs with ornate ﴿…﴾ — the
+-- shared-wording inline highlight (D-R3-14 display half; TextViewer
+-- has no rich text, so the marks ARE the highlight). The Quranic
+-- quotation brackets replaced «…» on owner feedback 2026-07-26 ("the
+-- quotation markers are not enough"): they are large, unmistakable,
+-- and present in the Arabic UI fonts. Out-of-range runs are skipped;
+-- the text is otherwise unchanged.
 function M.markWords(text, runs)
     if not (runs and #runs > 0) then return text end
     local words = {}
@@ -473,8 +476,8 @@ function M.markWords(text, runs)
     for _i, r in ipairs(runs) do
         local a, b = r[1], r[2]
         if a and b and a >= 1 and b <= #words and a <= b then
-            words[a] = "«" .. words[a]
-            words[b] = words[b] .. "»"
+            words[a] = "\239\180\191" .. words[a]
+            words[b] = words[b] .. "\239\180\190"
         end
     end
     return table.concat(words, " ")
@@ -497,8 +500,8 @@ function M.contextWindow(text, from, to, pad)
     if a > 1 then out[#out + 1] = "…" end
     for i = a, b do
         local w = words[i]
-        if i == from then w = "«" .. w end
-        if i == to then w = w .. "»" end
+        if i == from then w = "\239\180\191" .. w end
+        if i == to then w = w .. "\239\180\190" end
         out[#out + 1] = w
     end
     if b < #words then out[#out + 1] = "…" end
@@ -758,7 +761,7 @@ function M.similarPairSpec(d)
         -- should compare "more directly", like the similar pair view)
         meta = string.format("%s ×%d", _("Repeated phrase"), d.count or 0)
         if (d.a_runs and #d.a_runs > 0) or (d.b_runs and #d.b_runs > 0) then
-            meta = meta .. "\n" .. _("The phrase is marked « »")
+            meta = meta .. "\n" .. _("The phrase is marked \239\180\191 \239\180\190")
         end
     else
         -- "matched", not "shared": QUL's matcher tolerates inflection
@@ -782,7 +785,7 @@ function M.similarPairSpec(d)
             meta = meta .. " (" .. table.concat(cov, " · ") .. ")"
         end
         if (d.a_runs and #d.a_runs > 0) or (d.b_runs and #d.b_runs > 0) then
-            meta = meta .. "\n" .. _("Matched wording is marked « »")
+            meta = meta .. "\n" .. _("Matched wording is marked \239\180\191 \239\180\190")
         end
     end
     local function section(x, runs)
@@ -1043,16 +1046,17 @@ local function phraseGroupItem(browser, conn, g, origin)
             for _j, o in ipairs(occ) do
                 local name = quran.surahName and quran:surahName(o.surah)
                     or tostring(o.surah)
+                -- Arabic only (owner 2026-07-26: no translations in the
+                -- occurrence list); ﴿…﴾ marks the shared wording, and
+                -- the freed space buys wider context
                 local ctx
                 if qt and o.w_from and o.w_to then
                     local raw = ayahArabic(qt, tconn, o.surah, o.ayah)
                     ctx = raw
-                        and disp(M.contextWindow(raw, o.w_from, o.w_to, 3))
+                        and disp(M.contextWindow(raw, o.w_from, o.w_to, 5))
                 end
-                local pv = qt and transPreview(quran, qt, tconn, o.surah, o.ayah, 70)
                 local text = ctx
                     or string.format("%s %d:%d", name, o.surah, o.ayah)
-                if pv then text = text .. " · " .. pv end
                 local b_idx = _j
                 table.insert(oitems, {
                     text = text,
@@ -1120,32 +1124,30 @@ function M.showSimilar(browser, surah, ayah)
         m.kind = "meaning"
         table.insert(plist, m)
     end
-    -- widest stored run, clipped to 8 words — the row-level glimpse
-    local function snippet(m)
-        if m.kind ~= "wording" or not (cconn and cx and cx.phraseSpans) then
-            return
-        end
-        local fwd = cx.phraseSpans(cconn, surah, ayah, m.surah, m.ayah)
-        local rev = cx.phraseSpans(cconn, m.surah, m.ayah, surah, ayah)
-        local src, runs
-        if fwd and fwd.match_words[1] then
-            src = ayahArabic(qt, tconn, m.surah, m.ayah)
-            runs = fwd.match_words
-        elseif rev and rev.match_words[1] then
-            src = ayahArabic(qt, tconn, surah, ayah)
-            runs = rev.match_words
-        end
+    -- The similar ayah's own ARABIC (owner 2026-07-26: "why not show
+    -- the original text?" — translations left to the pair view): the
+    -- shared wording ﴿…﴾-marked in place with context when the
+    -- connections package stores its spans, else a leading slice.
+    local function arabicRow(m)
+        local src = ayahArabic(qt, tconn, m.surah, m.ayah)
         if not src then return end
-        local best
-        for _j, r in ipairs(runs) do
-            if not best or (r[2] - r[1]) > (best[2] - best[1]) then
-                best = r
+        if m.kind == "wording" and cconn and cx and cx.phraseSpans then
+            local fwd = cx.phraseSpans(cconn, surah, ayah, m.surah, m.ayah)
+            if fwd and fwd.match_words[1] then
+                local best
+                for _j, r in ipairs(fwd.match_words) do
+                    if not best or (r[2] - r[1]) > (best[2] - best[1]) then
+                        best = r
+                    end
+                end
+                return disp(M.contextWindow(src, best[1], best[2], 4))
             end
         end
-        local to = math.min(best[2], best[1] + 7)
-        local s = M.sliceWords(src, best[1], to)
-        if not s then return end
-        if to < best[2] then s = s .. " …" end
+        local words = {}
+        for w in src:gmatch("%S+") do words[#words + 1] = w end
+        local to = math.min(#words, 12)
+        local s = table.concat(words, " ", 1, to)
+        if to < #words then s = s .. " …" end
         return disp(s)
     end
     local items = {}
@@ -1153,19 +1155,17 @@ function M.showSimilar(browser, surah, ayah)
         local name = quran.surahName and quran:surahName(m.surah)
             or tostring(m.surah)
         local locus = string.format("%s %d:%d", name, m.surah, m.ayah)
-        local ov = snippet(m)
-        local pv = transPreview(quran, qt, tconn, m.surah, m.ayah, 90)
-        local text = locus
-        if ov then text = text .. "  «" .. ov .. "»" end
-        if pv then text = text .. " · " .. pv end
+        local text = arabicRow(m) or locus
         local mand
         if m.kind == "meaning" then
             -- the semantic layer: wording % gives way to a "meaning"
             -- tag (strong = QurSim degree 2)
-            mand = (m.score or 1) >= 2
-                and _("meaning · strong") or _("meaning")
+            mand = string.format("%d:%d · %s", m.surah, m.ayah,
+                (m.score or 1) >= 2 and _("meaning · strong")
+                    or _("meaning"))
         else
-            mand = string.format("%d%%", m.score or 0)
+            mand = string.format("%d:%d · %d%%", m.surah, m.ayah,
+                m.score or 0)
         end
         local idx = i
         table.insert(items, {

@@ -3126,23 +3126,23 @@ eq(topic_text:find("×147", 1, true) ~= nil, true, "qul: topic meta includes aya
 eq(topic_text:find("Allah is…", 1, true) ~= nil, true, "qul: topic description flattened")
 
 -- Dense similar/phrases pure helpers (owner 2026-07-18 part 2 — the
--- D-R3-14 display half: word slices, «» run marks, context windows,
+-- D-R3-14 display half: word slices, ornate-paren run marks, context windows,
 -- and the unified pair-view spec)
 do
     eq(QQ.sliceWords("a b c d e f", 2, 4), "b c d",
         "qul: sliceWords 1-based inclusive")
     eq(QQ.sliceWords("a b", 1, 3), nil, "qul: sliceWords out-of-range nil")
-    eq(QQ.markWords("a b c d e", { { 2, 3 } }), "a «b c» d e",
+    eq(QQ.markWords("a b c d e", { { 2, 3 } }), "a ﴿b c﴾ d e",
         "qul: markWords wraps the run")
-    eq(QQ.markWords("a b c d e", { { 1, 1 }, { 4, 5 } }), "«a» b c «d e»",
+    eq(QQ.markWords("a b c d e", { { 1, 1 }, { 4, 5 } }), "﴿a﴾ b c ﴿d e﴾",
         "qul: markWords multiple runs")
     eq(QQ.markWords("a b", { { 5, 9 } }), "a b", "qul: markWords skips bad runs")
     eq(QQ.markWords("a b", nil), "a b", "qul: markWords nil runs passthrough")
     eq(QQ.contextWindow("w1 w2 w3 w4 w5 w6 w7 w8 w9 w10", 5, 6, 2),
-        "… w3 w4 «w5 w6» w7 w8 …", "qul: contextWindow pads + ellipses")
-    eq(QQ.contextWindow("w1 w2 w3", 1, 2, 3), "«w1 w2» w3",
+        "… w3 w4 ﴿w5 w6﴾ w7 w8 …", "qul: contextWindow pads + ellipses")
+    eq(QQ.contextWindow("w1 w2 w3", 1, 2, 3), "﴿w1 w2﴾ w3",
         "qul: contextWindow no trim, no ellipses")
-    eq(QQ.contextWindow("w1 w2 w3", 2, 2, 0), "… «w2» …",
+    eq(QQ.contextWindow("w1 w2 w3", 2, 2, 0), "… ﴿w2﴾ …",
         "qul: contextWindow single-word run")
     local sp = QQ.similarPairSpec{
         kind = "wording", score = 69,
@@ -3158,11 +3158,11 @@ do
         true, "pair-spec: meta leads with % and word count")
     eq(sp.text:find("(20% of 2:255 · 34% of 42:4)", 1, true) ~= nil, true,
         "pair-spec: per-side coverage")
-    eq(sp.text:find("Matched wording is marked « »", 1, true) ~= nil, true,
+    eq(sp.text:find("Matched wording is marked ﴿ ﴾", 1, true) ~= nil, true,
         "pair-spec: marks legend when runs exist")
-    eq(sp.text:find("«t1 t2» t3", 1, true) ~= nil, true,
+    eq(sp.text:find("﴿t1 t2﴾ t3", 1, true) ~= nil, true,
         "pair-spec: a-side run marked")
-    eq(sp.text:find("u1 «u2 u3 u4»", 1, true) ~= nil, true,
+    eq(sp.text:find("u1 ﴿u2 u3 u4﴾", 1, true) ~= nil, true,
         "pair-spec: b-side run marked")
     eq(sp.text:find("Al-Baqarah 2:255", 1, true) ~= nil, true,
         "pair-spec: locus headers")
@@ -3185,11 +3185,11 @@ do
     eq(sp3.title, "Repeated phrase 2:3 ↔ 8:3", "pair-spec: phrase pair titled")
     eq(sp3.text:find("Repeated phrase ×4", 1, true) ~= nil, true,
         "pair-spec: phrase meta = ×count")
-    eq(sp3.text:find("The phrase is marked « »", 1, true) ~= nil, true,
+    eq(sp3.text:find("The phrase is marked ﴿ ﴾", 1, true) ~= nil, true,
         "pair-spec: phrase marks legend")
-    eq(sp3.text:find("«x1 x2» x3 x4", 1, true) ~= nil, true,
+    eq(sp3.text:find("﴿x1 x2﴾ x3 x4", 1, true) ~= nil, true,
         "pair-spec: phrase a-side marked")
-    eq(sp3.text:find("y1 «y2 y3»", 1, true) ~= nil, true,
+    eq(sp3.text:find("y1 ﴿y2 y3﴾", 1, true) ~= nil, true,
         "pair-spec: phrase b-side marked")
 end
 
@@ -4342,10 +4342,11 @@ QRD.show{
     end } },
 }
 eq(_shown.title, "T", "reader-show: title")
--- ND-8: the big window sizes like the koassistant viewer (screen minus
--- a 30dp margin; stub screen 800x1200, identity scale)
-eq(_shown.width, 770, "nd8: viewer width = screen minus slim margin")
-eq(_shown.height, 1170, "nd8: viewer height = screen minus slim margin")
+-- ND-8 WITHDRAWN (owner): the Reader surface is FULL SCREEN; the
+-- koassistant note meant the grammar stardict staying in the dict
+-- popup (the round-2 popup-lock)
+eq(_shown.width, 800, "reader-show: full-screen width")
+eq(_shown.height, 1200, "reader-show: full-screen height")
 local rrow = _shown.buttons_table[1]
 eq(#rrow, 4, "reader-show: close + prev/next + extra buttons")
 rrow[3].callback()
@@ -4779,6 +4780,50 @@ do
         "nd4: reading windows keep the cycle knob")
 end
 
+-- ND-12 sticky lookup (owner: device-only intermittent no-open): the
+-- progress InfoMessage doubles as Trapper's trap widget, so a stray
+-- tap mid-sdcv cancels the lookup; programmatic popup opens disarm it
+-- for their one lookup and restore the stock behavior after
+do
+    local schunk = "local logger = { warn = function() end }\n"
+        .. "local Quran = {}\n"
+        .. extract("--- ND-12 (owner: intermittent no-open",
+                   "function Quran:openAyahPopup")
+        .. "\nreturn Quran\n"
+    local S = assert(loadstring(schunk))()
+    local disarmed_msg
+    local dict = {
+        showLookupInfo = function(self_d, word)
+            self_d.lookup_progress_msg = {
+                key_events = { AnyKeyPressed = {} },
+                ges_events = { TapClose = {} },
+                word = word,
+            }
+        end,
+        onLookupWord = function(self_d, key)
+            self_d:showLookupInfo(key)
+            disarmed_msg = self_d.lookup_progress_msg
+            self_d._looked = key
+        end,
+    }
+    local sq = { ui = { dictionary = dict }, _stickyLookup = S._stickyLookup }
+    sq:_stickyLookup("Al-Baqarah 30")
+    eq(dict._looked, "Al-Baqarah 30", "sticky: the lookup fired")
+    eq(next(disarmed_msg.key_events) == nil
+        and next(disarmed_msg.ges_events) == nil, true,
+        "sticky: progress message disarmed for the requested lookup")
+    dict:showLookupInfo("x")
+    eq(dict.lookup_progress_msg.ges_events.TapClose ~= nil, true,
+        "sticky: stock showLookupInfo restored after the call")
+    -- all four programmatic popup routes ride it
+    local msrc5 = io.open(PLUGIN_DIR .. "/main.lua"):read("*a")
+    local n_sticky = 0
+    for _ in msrc5:gmatch("self:_stickyLookup%(") do
+        n_sticky = n_sticky + 1
+    end
+    eq(n_sticky, 4, "sticky: ayah popup + overview + both in-popup navs")
+end
+
 -- _ayahDictKeys + _rawDefinition (extracted live): the dict-key
 -- convention and the one-call candidate-list fetch
 local kchunk = "local SURAH_NAMES = { [2] = 'Al-Baqarah' }\nlocal Quran = {}\n"
@@ -4840,23 +4885,31 @@ if have_qul and sq3_ok then
     eq(sim_item ~= nil, true, "uap-route: the 27:30 pair is listed")
     sim_item.callback()
     eq(uap_route, "27:30", "uap-route: similar item opens the unified ayah page")
-    -- R3 batch 4: rows preview the paired ayah's translation
+    -- owner 2026-07-26: similar rows show the ayah's ORIGINAL text,
+    -- never a translation preview (translations live in the pair view);
+    -- the locus moves to the count column beside the score
     dq._textModule = function()
         return {
             ensureDb = function() return true end,
-            translations = function(_c, s2, a2)
-                return { { text = "Preview text for " .. s2 .. ":" .. a2 } }
+            ayah = function(_c, _r, s2, a2)
+                return { text = "ar" .. s2 .. ":" .. a2 .. " w2 w3 w4" }
             end,
         }
     end
+    local keep_cxm = fb.connectionsModule
+    fb.connectionsModule = nil
     QQ2.showSimilar(fb, 1, 1)
     local prev_item
     for _i, it in ipairs(nav_items) do
-        if it.text and it.text:find("27:30", 1, true) then prev_item = it end
+        if it.mandatory and tostring(it.mandatory):find("27:30", 1, true) then
+            prev_item = it
+        end
     end
-    eq(prev_item ~= nil and prev_item.text:find(
-        " · Preview text for 27:30", 1, true) ~= nil, true,
-        "r3-b4: similar rows carry a translation preview")
+    eq(prev_item ~= nil and prev_item.text:find("ar27:30", 1, true) ~= nil,
+        true, "sim-rows: the row shows the ayah's own text, no translation")
+    eq(tostring(prev_item.mandatory):find("%%") ~= nil, true,
+        "sim-rows: locus + score share the count column")
+    fb.connectionsModule = keep_cxm
     dq._textModule = nil
 
     -- Dense rows + the unified PAIR view (owner 2026-07-18 part 2 —
@@ -4882,12 +4935,12 @@ if have_qul and sq3_ok then
         QQ2.showSimilar(fb, 1, 1)
         local dense_item
         for _i, it in ipairs(nav_items) do
-            if it.text and it.text:find("27:30", 1, true) then
+            if it.mandatory and tostring(it.mandatory):find("27:30", 1, true) then
                 dense_item = it
             end
         end
         eq(dense_item ~= nil, true, "dense-sim: 27:30 row present")
-        eq(dense_item.text:find("«", 1, true) ~= nil, true,
+        eq(dense_item.text:find("﴿", 1, true) ~= nil, true,
             "dense-sim: row carries the shared-wording snippet")
         dense_item.callback()
         eq(simspec ~= nil, true, "dense-sim: tap opens the pair view")
@@ -4897,15 +4950,15 @@ if have_qul and sq3_ok then
             "dense-sim: pair view titled with both loci")
         eq(simspec.text:find("Matched wording · 80%", 1, true) ~= nil, true,
             "dense-sim: similarity % leads the meta line")
-        eq(simspec.text:find("«", 1, true) ~= nil, true,
+        eq(simspec.text:find("﴿", 1, true) ~= nil, true,
             "dense-sim: marked overlap in the pair text")
         eq(#simspec.extra_buttons, 2, "dense-sim: two Open buttons")
         uap_route = nil
         simspec.extra_buttons[2].callback()
         eq(uap_route, "27:30", "dense-sim: Open lands on the pair ayah page")
 
-        -- Phrase occurrences: the phrase IN its ayah (context window,
-        -- «» marked) + translation preview, locus in the right column
+        -- Phrase occurrences: Arabic only (owner 2026-07-26), the phrase
+        -- IN its ayah, ornate-marked, locus in the right column
         local nav_title2, nav_opts2
         fb.navigateForward = function(_, t2, items, _f2, o2)
             nav_title2, nav_items, nav_opts2 = t2, items, o2
@@ -4920,7 +4973,7 @@ if have_qul and sq3_ok then
             "dense-phr: occurrence rows two-line")
         local n_ctx, n_locus = 0, 0
         for _i, it in ipairs(nav_items) do
-            if it.text and it.text:find("«", 1, true) then
+            if it.text and it.text:find("﴿", 1, true) then
                 n_ctx = n_ctx + 1
             end
             if it.mandatory and it.mandatory:find("^%d+:%d+$") then
@@ -4939,7 +4992,7 @@ if have_qul and sq3_ok then
             "dense-phr: occurrence tap opens the comparison pair view")
         eq(simspec.title:find("Repeated phrase", 1, true) ~= nil, true,
             "dense-phr: pair view titled with the phrase kind")
-        eq(simspec.text:find("«", 1, true) ~= nil, true,
+        eq(simspec.text:find("﴿", 1, true) ~= nil, true,
             "dense-phr: the phrase marked in the pair text")
         uap_route = nil
         simspec.extra_buttons[2].callback()

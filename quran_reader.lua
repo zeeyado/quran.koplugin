@@ -713,11 +713,12 @@ function M.show(spec)
     viewer = TextViewer:new{
         title = spec.title,
         text = spec.text,
-        -- ND-8 (owner): the big reading window sizes like the
-        -- koassistant viewer — screen minus a slim margin, so it reads
-        -- as a floating window over the page instead of a mode switch
-        width = Screen:getWidth() - Screen:scaleBySize(30),
-        height = Screen:getHeight() - Screen:scaleBySize(30),
+        -- FULL SCREEN on purpose (ND-8 WITHDRAWN, owner 2026-07-26:
+        -- the koassistant-dims note meant the grammar STARDICT staying
+        -- in the dict popup, which the round-2 popup-lock delivers;
+        -- the Reader surface is a full-screen reading mode)
+        width = Screen:getWidth(),
+        height = Screen:getHeight(),
         justified = M.text_layout == "justify",
         auto_para_direction = not forced,
         para_direction_rtl = forced and M.text_layout == "rtl" or nil,
