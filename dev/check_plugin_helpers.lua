@@ -4875,8 +4875,19 @@ eq(tgq:_openTargetFor("grammar"), "popup",
 tset.open_target_grammar = "reader"
 eq(tgq:_openTargetFor("grammar"), "popup",
     "open-lock: grammar popup even against a reader override")
+-- Round 8: I'rab UNLOCKED (owner: only grammar + word dict are
+-- formatting-locked) — it follows the normal routing
+tset.open_target_irab = nil
+eq(tgq:_openTargetFor("irab"), "reader",
+    "open-lock: irab unlocked, browser default full screen")
+tset.open_target_irab = "popup"
 eq(tgq:_openTargetFor("irab"), "popup",
-    "open-lock: irab locked to popup too")
+    "open-lock: irab honors a popup override")
+tset.quran_simple_mode = true
+tset.open_target_irab = nil
+eq(tgq:_openTargetFor("irab"), "popup",
+    "open-lock: irab follows Minimal popups")
+tset.quran_simple_mode = nil
 tset.open_target_grammar = "popup"
 eq(tgq:_popupButtonOn("explore"), true, "d-r3-2: popup buttons default on")
 tset.popup_btn_explore = false
@@ -4925,6 +4936,8 @@ do
             self_d:showLookupInfo(key)
             disarmed_msg = self_d.lookup_progress_msg
             self_d._looked = key
+            self_d._fuzzy_at_call = self_d.disable_fuzzy_search
+            self_d._fuzzy_fm_at_call = self_d.disable_fuzzy_search_fm
         end,
     }
     local sq = { ui = { dictionary = dict }, _stickyLookup = S._stickyLookup }
@@ -4933,6 +4946,13 @@ do
     eq(next(disarmed_msg.key_events) == nil
         and next(disarmed_msg.ges_events) == nil, true,
         "sticky: progress message disarmed for the requested lookup")
+    -- Round 8 (owner phone repro): programmatic keys are exact by
+    -- construction; fuzzy sdcv scanned whole dict indexes on misses
+    eq(dict._fuzzy_at_call == true and dict._fuzzy_fm_at_call == true,
+        true, "sticky: programmatic lookups run exact-only (round 8)")
+    eq(dict.disable_fuzzy_search == nil
+        and dict.disable_fuzzy_search_fm == nil, true,
+        "sticky: the user's own fuzzy setting restored after the call")
     dict:showLookupInfo("x")
     eq(dict.lookup_progress_msg.ges_events.TapClose ~= nil, true,
         "sticky: stock showLookupInfo restored after the call")

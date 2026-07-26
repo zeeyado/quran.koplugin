@@ -2450,9 +2450,28 @@ function Quran:_stickyLookup(key)
             end
         end
     end
-    -- the wrapped showLookupInfo is consumed synchronously before the
-    -- lookup coroutine first yields, so restoring right after is safe
+    -- EXACT-ONLY for programmatic lookups (owner phone repro
+    -- 2026-07-26 round 8: "searching for a minute and nothing
+    -- happens", first press after the popup eaten). Our keys are
+    -- exact headwords by construction, so fuzzy buys nothing here;
+    -- but on slow devices sdcv's fuzzy fallback scans the WHOLE index
+    -- of every enabled dict the key misses in (the word dict's tens
+    -- of thousands of Arabic headwords), so the popup sat in
+    -- "Searching…" for tens of seconds — and any lookup slower than
+    -- quick_dismiss_before_delay (3s) makes stock discard the next
+    -- input events after the window opens (the eaten first press).
+    -- Exact-only makes these lookups fast, which retires both.
+    -- Selection lookups in the book keep the user's own fuzzy
+    -- setting. The flags are consumed synchronously before the
+    -- lookup coroutine first yields (same as the showLookupInfo
+    -- wrap), so restoring right after the call is safe.
+    local o_fuzzy = dictionary.disable_fuzzy_search
+    local o_fuzzy_fm = dictionary.disable_fuzzy_search_fm
+    dictionary.disable_fuzzy_search = true
+    dictionary.disable_fuzzy_search_fm = true
     local ok, err = pcall(dictionary.onLookupWord, dictionary, key)
+    dictionary.disable_fuzzy_search = o_fuzzy
+    dictionary.disable_fuzzy_search_fm = o_fuzzy_fm
     if orig_show then dictionary.showLookupInfo = orig_show end
     if not ok then
         logger.warn("quran.koplugin: sticky lookup failed", err)
@@ -3244,15 +3263,20 @@ function Quran:_installedTafsirs()
 end
 
 --- D-R3-2: effective open target for a content kind (tafsir, grammar,
--- irab, asbab, overview). Grammar-family kinds are LOCKED to the dict
--- popup (owner 2026-07-26: the Reader renders dense grammar tables
--- poorly until D-R3-21 Reader-HTML; from the Explorer the popup opens
--- OVER it, never closing it). For the rest, a per-item override in
+-- irab, asbab, overview). GRAMMAR is LOCKED to the dict popup (owner
+-- 2026-07-26: the Reader renders dense grammar tables poorly until
+-- D-R3-21 Reader-HTML; from the Explorer the popup opens OVER it,
+-- never closing it). For the rest, a per-item override in
 -- settings wins ("popup" / "reader"); otherwise Minimal popups (né
 -- Simple mode, key quran_simple_mode) → the dict popup, default →
 -- full screen.
 function Quran:_openTargetFor(kind)
-    if kind == "grammar" or kind == "irab" then return "popup" end
+    -- GRAMMAR stays popup-locked (MuPDF renders its tables; TextViewer
+    -- mangles them) — the word dict popup-locks by nature. I'rab
+    -- UNLOCKED (owner 2026-07-26 round 8: "fine for that to open in
+    -- browser; only grammar dict and word dict are locked due to
+    -- formatting"): it follows the normal routing below.
+    if kind == "grammar" then return "popup" end
     local s = self.settings
     local override = s and s:readSetting("open_target_" .. (kind or ""))
     if override == "popup" or override == "reader" then return override end
@@ -4839,7 +4863,7 @@ function Quran:addToMainMenu(menu_items)
                                 .. (self.settings:isTrue("quran_simple_mode")
                                     and "  ✓" or "")
                         end,
-                        help_text = _("Ayah resources open in the quick dictionary popup by default instead of full-screen reading windows. Nothing is removed: every advanced view stays reachable. Grammar and I'rab always use the popup regardless. Also toggleable in the quick panel."),
+                        help_text = _("Ayah resources open in the quick dictionary popup by default instead of full-screen reading windows. Nothing is removed: every advanced view stays reachable. Grammar always uses the popup regardless. Also toggleable in the quick panel."),
                         checked_func = function()
                             return self.settings:isTrue("quran_simple_mode")
                         end,
@@ -4854,14 +4878,15 @@ function Quran:addToMainMenu(menu_items)
                         help_text = _("Where each resource opens (full screen or the dictionary popup) and which buttons the popup carries."),
                         sub_item_table = (function()
                             local items = {}
-                            -- Owner 2026-07-26: grammar-family kinds are
-                            -- LOCKED to the popup (see _openTargetFor);
-                            -- their rows say so instead of offering a
-                            -- radio that would not be honored.
+                            -- Owner 2026-07-26 (amended round 8): only
+                            -- GRAMMAR is LOCKED to the popup (see
+                            -- _openTargetFor); its row says so instead
+                            -- of offering a radio that would not be
+                            -- honored. I'rab routes normally.
                             local kinds = {
                                 { key = "tafsir", label = _("Tafsir") },
                                 { key = "grammar", label = _("Grammar"), locked = true },
-                                { key = "irab", label = _("I'rab"), locked = true },
+                                { key = "irab", label = _("I'rab") },
                                 { key = "asbab", label = _("Asbab al-Nuzul") },
                                 { key = "overview", label = _("Surah overview") },
                             }
