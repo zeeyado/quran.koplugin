@@ -1023,7 +1023,15 @@ function M.showQuickPanel(quran)
     if surah then
         local name = quran:surahName(surah) or ("Surah " .. surah)
         if ayah then
-            title = string.format("%s  %d:%d", name, surah, ayah)
+            -- visible RANGE, not just the first ayah (owner 2026-07-26
+            -- round 7: the position reads as a page = a span of ayahs)
+            local _rs, r1, r2 = M.visibleAyahRange(quran)
+            if r1 and r2 and r2 > r1 then
+                title = string.format("%s  %d:%d\226\128\147%d",
+                    name, surah, r1, r2)
+            else
+                title = string.format("%s  %d:%d", name, surah, ayah)
+            end
         else
             title = name
         end

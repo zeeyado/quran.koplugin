@@ -337,22 +337,18 @@ function Browser:showSearchResults(q)
 end
 
 -- The UNIFIED AYAH PAGE (design D4): the one canonical screen per S:A —
--- every ayah reference in the hub routes here; it is also the
--- Current-position landing. hafs_ayah is Hafs-numbered (the canonical
--- key of all connection data, invariant D8); jumps convert to book
--- numbering at the boundary. opts.range = {first, last} (book-space
--- visible range, position landing only) — shown in the title.
+-- every ayah reference in the hub routes here; it is also where the
+-- Current-position range row lands. hafs_ayah is Hafs-numbered (the
+-- canonical key of all connection data, invariant D8); jumps convert
+-- to book numbering at the boundary. Always titled with the SINGLE
+-- ayah it scopes (owner 2026-07-26 round 7: the old range title read
+-- as a page "for the range" when the content is the first ayah's;
+-- the range lives on the surah-page row that opens this).
 function Browser:showAyahPage(surah, hafs_ayah, opts)
     opts = opts or {}
     local quran, actions = self.quran, self.actions
     local name = quran:surahName(surah) or ("Surah " .. surah)
-    local title
-    if opts.range and opts.range[2] and opts.range[2] > opts.range[1] then
-        title = string.format("%s %d:%d\226\128\147%d", name, surah,
-            opts.range[1], opts.range[2])
-    else
-        title = string.format("%s %d:%d", name, surah, hafs_ayah)
-    end
+    local title = string.format("%s %d:%d", name, surah, hafs_ayah)
 
     local items = {}
     -- Reading surfaces (all in-browser; the dict popup stays an in-book
@@ -596,8 +592,8 @@ function Browser:showPosition()
         text = pos_label,
         separator = true,
         callback = function()
-            self:showAyahPage(surah, hafs_first,
-                { range = { hafs_first, hafs_last } })
+            -- single-ayah landing (the row itself names the range)
+            self:showAyahPage(surah, hafs_first)
         end,
     })
     self:navigateForward(sub_title, sub_items)
@@ -989,13 +985,27 @@ function Browser:buildRootItems()
     -- without a book.
     local doc = quran.ui and quran.ui.document
     if doc then
+        -- the label carries the visible RANGE (owner 2026-07-26 round
+        -- 7: same as the surah page's "On this page:" row), Hafs
+        -- numbers (D8) like every other browser label
         local pos_label = _("Current position")
-        local pageno = doc.getCurrentPage and doc:getCurrentPage()
-        if pageno then
-            local surah, ayah = actions.findAyahForPage(quran, pageno)
-            if surah then
-                local name = quran:surahName(surah) or ("Surah " .. surah)
-                pos_label = ayah and string.format("%s %d:%d", name, surah, ayah) or name
+        local surah, first, last
+        if actions.visibleAyahRange then
+            surah, first, last = actions.visibleAyahRange(quran)
+        end
+        if surah then
+            local name = quran:surahName(surah) or ("Surah " .. surah)
+            local h1 = first and (quran._warshToHafs
+                and quran:_warshToHafs(surah, first) or first)
+            local h2 = last and (quran._warshToHafs
+                and quran:_warshToHafs(surah, last) or last)
+            if h1 and h2 and h2 > h1 then
+                pos_label = string.format("%s %d:%d\226\128\147%d",
+                    name, surah, h1, h2)
+            elseif h1 then
+                pos_label = string.format("%s %d:%d", name, surah, h1)
+            else
+                pos_label = name
             end
         end
         table.insert(items, {

@@ -603,6 +603,10 @@ function M.contextWindow(text, from, to, pad)
     if not (from and to) or from < 1 or to > #words or from > to then
         return nil
     end
+    -- a run covering the WHOLE text gets no marks (owner 2026-07-26
+    -- round 7: 100%-match rows bracketed the entire ayah, pointless
+    -- and the edge brackets read inverted in RTL rows)
+    if from == 1 and to == #words then return text end
     pad = pad or 3
     local a = math.max(1, from - pad)
     local b = math.min(#words, to + pad)

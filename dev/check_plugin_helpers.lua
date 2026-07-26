@@ -753,6 +753,8 @@ QB.show(bq, QA)  -- fresh instance
 _shown.item_table[4].callback()  -- Juz
 eq(_shown.switch_log[1].n, 30, "browser: juz list has 30 items")
 QB.show(bq, QA)
+eq(_shown.item_table[1].text, "Current position:  Surah77 77:33",
+    "uap: root row carries the position label (range-aware, round 7)")
 _shown.item_table[1].callback()  -- Current position → SURAH page (round 6)
 local sur_items = _shown.item_table
 eq(_shown.title, "Surah77", "uap: position lands on the surah page")
@@ -940,6 +942,16 @@ do
         "position: visible range promoted as a row")
     eq(spos:find("table.insert(sub_items, 1", 1, true) ~= nil, true,
         "position: the range row is FIRST")
+    -- round 7: the ayah page is titled with the SINGLE ayah it scopes
+    -- (the range lives on the rows that open it, never on the page)
+    eq(bsrc:find("opts.range", 1, true), nil,
+        "position: no range-titled ayah page")
+    -- round 7: the quick panel title carries the visible range
+    local csrc = io.open(PLUGIN_DIR .. "/quran_actions.lua"):read("*a")
+    local qp = csrc:match("function M.showQuickPanel.-\nend")
+    eq(qp ~= nil, true, "round7: quick panel sliced")
+    eq(qp:find("visibleAyahRange", 1, true) ~= nil, true,
+        "round7: panel title carries the visible range")
 end
 
 local merged = QAS.mergeDictState(
@@ -3201,6 +3213,8 @@ do
         "qul: contextWindow no trim, no ellipses")
     eq(QQ.contextWindow("w1 w2 w3", 2, 2, 0), "… ﴿w2﴾ …",
         "qul: contextWindow single-word run")
+    eq(QQ.contextWindow("w1 w2 w3", 1, 3, 2), "w1 w2 w3",
+        "qul: contextWindow full-run = NO marks (round 7: 100% rows)")
     local sp = QQ.similarPairSpec{
         kind = "wording", score = 69,
         a = { surah = 2, ayah = 255, name = "Al-Baqarah",
