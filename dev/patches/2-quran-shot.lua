@@ -16,6 +16,8 @@ UIManager:scheduleIn(12, function()
     end
     if mode == "panel" then
         UIManager:broadcastEvent(require("ui/event"):new("QuranQuickPanel"))
+    elseif mode == "goto" then
+        UIManager:broadcastEvent(require("ui/event"):new("QuranGotoAyah"))
     elseif mode == "browser" then withBrowser()
     elseif mode == "surahhub" then
         withBrowser(function(b)

@@ -436,8 +436,10 @@ end
 --- M1 (R4 build ④): the word-popup "Word grammar" button's entry — a
 -- bare spine word_id (the entry's <!-- ref:S:A:W --> ref), no browser
 -- beneath.
-function M.openWord(quran, word_id)
-    wordView(quran, word_id, nil, nil)
+function M.openWord(quran, word_id, back_label)
+    -- back_label nil = the Reader's "← Book" close (opened over the
+    -- book); browser-context callers pass the bare arrow (ND-20).
+    wordView(quran, word_id, nil, back_label)
 end
 
 return M

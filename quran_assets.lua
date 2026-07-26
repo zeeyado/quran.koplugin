@@ -1054,48 +1054,223 @@ local function downloadBook(variant, dest, after)
     end)
 end
 
-function M.showBookDialog(browser, v, installed_dir)
+-- G3 (owner 2026-07-25): an in-plugin update migrates the sidecar
+-- SILENTLY — annotations + reading position follow the new filename
+-- (DocSettings.updateLocation moves the whole sidecar incl. custom
+-- cover/metadata). History: updateItemByPath where this KOReader has
+-- it, else drop the stale old-path entry (the new file gets fresh
+-- history on first open).
+local function migrateBookRecords(old_path, new_path)
+    local ok, DocSettings = pcall(require, "docsettings")
+    if ok and DocSettings and DocSettings.updateLocation then
+        pcall(DocSettings.updateLocation, old_path, new_path)
+    end
+    local hok, ReadHistory = pcall(require, "readhistory")
+    if hok and ReadHistory then
+        if ReadHistory.updateItemByPath then
+            pcall(ReadHistory.updateItemByPath, ReadHistory, old_path, new_path)
+        elseif ReadHistory.removeItemByPath then
+            pcall(ReadHistory.removeItemByPath, ReadHistory, old_path)
+        end
+    end
+end
+
+-- Delete a book with its records: sidecar purge (DocSettings.
+-- updateLocation with no destination), history entry, then the file.
+local function deleteBook(path)
+    local ok, DocSettings = pcall(require, "docsettings")
+    if ok and DocSettings and DocSettings.updateLocation then
+        pcall(DocSettings.updateLocation, path)
+    end
+    local hok, ReadHistory = pcall(require, "readhistory")
+    if hok and ReadHistory and ReadHistory.removeItemByPath then
+        pcall(ReadHistory.removeItemByPath, ReadHistory, path)
+    end
+    os.remove(path)
+end
+
+-- ---------------------------------------------------------------------
+-- Unified per-book dialog (owner 2026-07-26): ONE popup from both My
+-- books and Get books rows, offering what applies — Open · Update ·
+-- Download / Download again · Delete · Close. Update actions share the
+-- library check's state (renamed = catalog old_filename · content = the
+-- last check's sha mismatches) and run IN PLACE, with the G3 silent
+-- sidecar migration on renames. VERSION-READY: the title shows the
+-- catalog's `version` when present (production packaging stamps the
+-- release tag there); until installed-version records exist for books,
+-- update detection stays filename + sha256.
+-- v = catalog variant (nil for an unrecognized file); opts = installed
+-- dir string (legacy Get-books call) or { rec = inventory rec,
+-- refresh = fn } from My books.
+-- ---------------------------------------------------------------------
+function M.showBookDialog(browser, v, opts)
     local UIManager = require("ui/uimanager")
     local ButtonDialog = require("ui/widget/buttondialog")
     local ConfirmBox = require("ui/widget/confirmbox")
-    local dialog
+    if type(opts) ~= "table" then opts = { installed_dir = opts } end
+    local rec = opts.rec
+    local refresh = opts.refresh or function() end
     local cat = M.cachedCatalog()
     local langs = cat and cat.languages or {}
-    local function doDownload()
-        UIManager:close(dialog)
-        local dest = booksDir(browser.quran) .. "/" .. v.filename
+
+    -- Resolve the installed file: the rec knows exactly (incl. the
+    -- twin-present flag); a Get-books call derives it from the ✓-marker
+    -- dir (current name, else the old-scheme name).
+    local dir, path, filename, new_present
+    if rec then
+        dir, path, filename = rec.dir, rec.path, rec.filename
+        new_present = rec.new_present or false
+    elseif opts.installed_dir and v then
         local lfs = require("libs/libkoreader-lfs")
-        local go = function()
-            downloadBook(v, dest, function()
-                notify(_("Book saved to:") .. "\n" .. dest)
-            end)
+        dir = opts.installed_dir
+        if lfs.attributes(dir .. "/" .. v.filename, "mode") == "file" then
+            filename = v.filename
+        elseif v.old_filename
+            and lfs.attributes(dir .. "/" .. v.old_filename, "mode") == "file" then
+            filename = v.old_filename
         end
-        if lfs.attributes(dest, "mode") == "file" then
-            UIManager:show(ConfirmBox:new{
-                text = _("This book already exists in the Quran folder. Overwrite it?"),
-                ok_text = _("Overwrite"),
-                ok_callback = go,
-            })
-        else
-            go()
-        end
+        path = filename and (dir .. "/" .. filename) or nil
+        new_present = filename == v.old_filename or false
     end
-    local status_line = v.status ~= "stable" and (" · " .. v.status) or ""
+    local installed = path ~= nil
+
+    -- Update state, shared with the My-books ⚠ markers
+    local renamed = installed and v and v.old_filename == filename
+        and v.filename ~= filename or false
+    local content = (installed and filename and v and M._content_updates
+        and M._content_updates[filename]) and true or false
+    new_present = renamed and new_present or false
+
+    local title = (rec and rec.title)
+        or (v and (M.entryTitle(v, langs, nil) or v.id))
+        or (filename and filename:gsub("%.epub$", "")) or "?"
+    local dialog
+    local function close() UIManager:close(dialog) end
+    local function done(msg)
+        close()
+        refresh()
+        if msg then notify(msg) end
+    end
+
+    local rows = {}
+    if installed then
+        table.insert(rows, {{
+            text = _("Open"),
+            callback = function()
+                close()
+                browser:closeThen(function()
+                    local ok, ReaderUI = pcall(require, "apps/reader/readerui")
+                    if ok and ReaderUI and ReaderUI.showReader then
+                        ReaderUI:showReader(path)
+                    end
+                end)()
+            end,
+        }})
+    end
+    if renamed then
+        local new_path = dir .. "/" .. v.filename
+        local function migrate()
+            migrateBookRecords(path, new_path)
+            os.remove(path)
+            done(_("Book updated. Reopen it to load the new build."))
+        end
+        table.insert(rows, {{
+            text = _("Update") .. " (" .. _("renamed edition") .. ")",
+            callback = function()
+                UIManager:show(ConfirmBox:new{
+                    text = title .. "\n\n" .. (new_present
+                        and _("The renamed edition is already in your folder. Remove the old file and move your notes and reading position to it?")
+                        or (_("This edition was renamed") .. ":\n" .. filename
+                            .. "\n\226\134\146 " .. v.filename .. "\n\n"   -- →
+                            .. _("Download the current build? Your notes and reading position move to the new file; the old file is removed."))),
+                    ok_text = _("Update"),
+                    ok_callback = function()
+                        if new_present then migrate()
+                        else downloadBook(v, new_path, migrate) end
+                    end,
+                })
+            end,
+        }})
+    elseif content then
+        table.insert(rows, {{
+            text = _("Update") .. " (" .. M.friendlySize(v.size) .. ")",
+            callback = function()
+                UIManager:show(ConfirmBox:new{
+                    text = title .. "\n\n" .. _("An updated build is available")
+                        .. " (" .. M.friendlySize(v.size) .. ").\n"
+                        .. _("Replace this book in place? Annotations stay; the reading position may shift."),
+                    ok_text = _("Update"),
+                    ok_callback = function()
+                        downloadBook(v, path, function()
+                            if M._content_updates then
+                                M._content_updates[filename] = nil
+                            end
+                            done(_("Book updated. Reopen it to load the new build."))
+                        end)
+                    end,
+                })
+            end,
+        }})
+    end
+    if v then
+        table.insert(rows, {{
+            text = installed and _("Download again") or _("Download"),
+            callback = function()
+                close()
+                local dest = booksDir(browser.quran) .. "/" .. v.filename
+                local go = function()
+                    downloadBook(v, dest, function()
+                        refresh()
+                        notify(_("Book saved to:") .. "\n" .. dest)
+                    end)
+                end
+                if lfs.attributes(dest, "mode") == "file" then
+                    UIManager:show(ConfirmBox:new{
+                        text = _("This book already exists in the Quran folder. Overwrite it?"),
+                        ok_text = _("Overwrite"),
+                        ok_callback = go,
+                    })
+                else
+                    go()
+                end
+            end,
+        }})
+    end
+    if installed then
+        table.insert(rows, {{
+            text = _("Delete"),
+            callback = function()
+                UIManager:show(ConfirmBox:new{
+                    text = title .. "\n\n" .. _("Delete this book? Its reading position and annotations are removed with it."),
+                    ok_text = _("Delete"),
+                    ok_callback = function()
+                        deleteBook(path)
+                        if M._content_updates and filename then
+                            M._content_updates[filename] = nil
+                        end
+                        done(_("Book deleted."))
+                    end,
+                })
+            end,
+        }})
+    end
+    table.insert(rows, {{ text = _("Close"), callback = close }})
+
+    local status_line = v and v.status and v.status ~= "stable"
+        and (" · " .. v.status) or ""
+    -- VERSION-READY: shown as soon as the catalog stamps one.
+    local ver_line = v and v.version
+        and ("\n" .. _("Version:") .. " " .. tostring(v.version)) or ""
+    local state_line = renamed
+        and ("\n\226\154\160 " .. _("Renamed edition available"))   -- ⚠
+        or (content and ("\n\226\154\160 " .. _("Update available")) or "")
     dialog = ButtonDialog:new{
-        title = (v.title and (v.title .. "\n") or "")
-            .. (M.entryTitle(v, langs, nil) or v.id)
-            .. "\n" .. M.friendlySize(v.size) .. status_line
-            .. (installed_dir and ("\n" .. _("Installed in:") .. " " .. installed_dir) or ""),
-        buttons = {
-            {{
-                text = installed_dir and _("Download again") or _("Download"),
-                callback = doDownload,
-            }},
-            {{
-                text = _("Close"),
-                callback = function() UIManager:close(dialog) end,
-            }},
-        },
+        title = title
+            .. (v and ("\n" .. M.friendlySize(v.size) .. status_line) or "")
+            .. ver_line
+            .. (dir and ("\n" .. _("Installed in:") .. " " .. dir) or "")
+            .. state_line,
+        buttons = rows,
     }
     UIManager:show(dialog)
 end
@@ -1441,43 +1616,69 @@ function M.bookInventory(quran, catalog)
     return recs
 end
 
--- Check EVERY recognized book in the library against the catalog: a
--- filename-scheme update (old_filename → the renamed edition) or a content
--- update (the file's sha256 differs from the published build). On-demand,
--- reports a summary (owner 2026-07-22 — replaces the per-open-book check).
--- The actual update/migrate flow is the next pass; for now it points you to
--- Get books.
+-- ---------------------------------------------------------------------
+-- Library-wide update check (owner 2026-07-22; unified-dialog reshape
+-- 2026-07-26 — no separate results screen).
+--
+-- Two update kinds, and why the My books screen can't know both up
+-- front: a RENAMED edition (the catalog's old_filename names this exact
+-- file) is free to detect at screen build, but a CONTENT update needs
+-- the file's sha256 against the published build — too slow for
+-- screen-open. So the list marks renamed editions always, content
+-- updates only once a check ran this session; the unified book dialog
+-- reads the SAME state, so the numbers can no longer disagree (the
+-- 2026-07-26 owner report: list said 1, check said more).
+-- ---------------------------------------------------------------------
+
+-- filename -> true for books whose sha256 differed at the last check;
+-- nil until a check ran this session. Entries clear as updates land.
+M._content_updates = nil
+
+--- Pure classification for the library-wide check: bookInventory recs +
+-- a hash function -> { renamed = {recs}, content = {recs} }.
+-- VERSION-READY: when production packaging stamps catalog `version`
+-- (release tags) AND books gain installed-version records, version
+-- compare slots in here beside the sha path.
+function M.updatePlan(recs, sha_of)
+    local plan = { renamed = {}, content = {} }
+    for _i, r in ipairs(recs) do
+        if r.outdated then
+            table.insert(plan.renamed, r)
+        elseif r.variant and r.variant.sha256 then
+            local sha = sha_of(r)
+            if sha and sha ~= r.variant.sha256 then
+                table.insert(plan.content, r)
+            end
+        end
+    end
+    return plan
+end
+
+--- Check EVERY recognized book against the catalog (renamed edition or
+-- content sha256 mismatch). Results land as ⚠ markers on the refreshed
+-- list + a summary; tapping a flagged book opens the unified dialog
+-- with its Update action (owner 2026-07-26).
 function M.checkAllUpdates(browser)
     ensureCatalog(function(cat)   -- force=true below: a check must be fresh
         local recs = M.bookInventory(browser.quran, cat)
-        local renamed, content = {}, {}
+        local plan
         withInfo(_("Checking your books for updates…"), function()
-            for _i, r in ipairs(recs) do
-                if r.outdated then
-                    table.insert(renamed, r.title)
-                elseif r.variant and r.variant.sha256 then
-                    local local_sha = M.sha256File(r.path)
-                    if local_sha and local_sha ~= r.variant.sha256 then
-                        table.insert(content, r.title)
-                    end
-                end
-            end
+            plan = M.updatePlan(recs, function(r) return M.sha256File(r.path) end)
         end)
-        local n = #renamed + #content
+        M._content_updates = {}
+        for _i, r in ipairs(plan.content) do
+            M._content_updates[r.filename] = true
+        end
+        -- The My books screen underneath was built before the check:
+        -- rebuild it in place so its markers agree with the summary.
+        browser:refreshScreen(M.myBooksItems(browser))
+        local n = #plan.renamed + #plan.content
         if n == 0 then
             notify(_("All your books are up to date."))
-            return
+        else
+            notify(_("Updates available") .. ": " .. n .. "\n"
+                .. _("Tap a flagged book to update it."))
         end
-        local lines = { _("Updates available") .. " (" .. n .. "):", "" }
-        for _i, t in ipairs(renamed) do
-            table.insert(lines, "\226\128\162 " .. t .. " (" .. _("renamed edition") .. ")")
-        end
-        for _i, t in ipairs(content) do
-            table.insert(lines, "\226\128\162 " .. t)
-        end
-        table.insert(lines, "")
-        table.insert(lines, _("Re-download the newer build from Get books (one-tap updating lands in the next pass)."))
-        notify(table.concat(lines, "\n"))
     end, true)
 end
 
@@ -1508,11 +1709,22 @@ function M.myBooksItems(browser)
             end,
         })
     end
-    local outdated = 0
-    for _i, r in ipairs(recs) do if r.outdated then outdated = outdated + 1 end end
-    if outdated > 0 then
+    -- ⚠ state shared with the results screen: renamed editions are known
+    -- at build time, content updates only after a session check — the
+    -- banner names which it is showing, so its number never silently
+    -- disagrees with the check's (owner 2026-07-26).
+    local function isFlagged(r)
+        return r.outdated
+            or (M._content_updates and M._content_updates[r.filename]
+                and r.variant ~= nil)
+    end
+    local flagged = 0
+    for _i, r in ipairs(recs) do if isFlagged(r) then flagged = flagged + 1 end end
+    if flagged > 0 then
+        local label = M._content_updates and _("Updates available")
+            or _("Renamed editions")
         table.insert(items, {
-            text = "\226\154\160 " .. _("Updates available") .. ": " .. outdated,  -- ⚠
+            text = "\226\154\160 " .. label .. ": " .. flagged,  -- ⚠
             dim = true,
             separator = true,
         })
@@ -1522,16 +1734,16 @@ function M.myBooksItems(browser)
     for _i, r in ipairs(recs) do
         table.insert(items, {
             text = r.title,       -- the canonical dot-joined title (wraps if long)
-            mandatory = r.outdated and "\226\154\160" or nil,   -- ⚠ = update available
-            -- closeThen RETURNS the callback (close browser, then open the
-            -- book) — assign it directly; wrapping it in another function
-            -- discarded the returned closure and tapping did nothing.
-            callback = browser:closeThen(function()
-                local ok, ReaderUI = pcall(require, "apps/reader/readerui")
-                if ok and ReaderUI and ReaderUI.showReader then
-                    ReaderUI:showReader(r.path)
-                end
-            end),
+            mandatory = isFlagged(r) and "\226\154\160" or nil,   -- ⚠ = update available
+            -- Owner 2026-07-26: tap opens the unified book dialog (Open ·
+            -- Update · Download again · Delete), not the book directly;
+            -- Open is its first button.
+            callback = function()
+                M.showBookDialog(browser, r.variant, { rec = r,
+                    refresh = function()
+                        browser:refreshScreen(M.myBooksItems(browser))
+                    end })
+            end,
         })
     end
     if #recs == 0 then

@@ -1241,40 +1241,71 @@ function Quran:init()
     end
 end
 
---- Register the word-popup "Word study" button (KOReader ≥ 2026.05).
--- R4 entry-point unification (owner 2026-07-18): ONE word-level door
--- replacing the separate Root explorer / Word grammar buttons — it
--- lands the word-study hub (root explorer with the D-R2-1 B2
--- sense-targeted landing, MASAQ i'rab, the root's occurrences). Shows
--- when the displayed entry carries a parseable "root: ‎X-Y-Z" line OR
--- a <!-- ref:S:A:W --> instance ref — word-dict entries only, so
--- ayah/tafsir popups never see it.
+--- Register the word-popup buttons (KOReader ≥ 2026.05). ND-20 (owner
+-- 2026-07-26): the single "Word study" hub door is now THREE inline
+-- buttons — Root explorer · Occurrences · Word grammar — each
+-- deep-linking THROUGH the browser word-study landing page (pushed
+-- beneath the target, so ← lands one level up on the word's own page).
+-- Each shows only when its identity exists in the displayed entry
+-- (root line for the first two, <!-- ref:S:A:W --> for grammar) —
+-- word-dict entries only, so ayah/tafsir popups never see them. The
+-- shared popup-layer knob (key `wordstudy`, unchanged) hides all three.
 function Quran:_registerWordStudyDictButton()
     local quran = self
+    -- Our custom ayah/overview popups replace the layout wholesale and
+    -- never reach the button pool; these only see word popups.
+    -- ⑤C: bookless is eligible — the surfaces are browser-based.
+    local function info(popup)
+        if not quranChromeEligible(quran) then return end
+        if quran._popupButtonOn
+                and not quran:_popupButtonOn("wordstudy") then
+            return
+        end
+        return quran:_popupWordInfo(popup)
+    end
+    local function jump(popup, target)
+        local root, word_id = quran:_popupWordInfo(popup)
+        if not (root or word_id) then return end
+        local surface = popup.word
+        popup:onClose()
+        quran:openWordStudy(root, word_id, surface, target)
+    end
+    -- ONE shared row_group = the trio renders on a SINGLE row (owner
+    -- 2026-07-26; DictQuickLookup groups conditional buttons by
+    -- row_group). Ids carry a sort prefix: orderedPairs drives the
+    -- within-row order, so a_/b_/c_ keeps Root · Occurrences · Grammar.
     self.ui.dictionary:addToDictButtons{
-        id = "quran_word_study",
-        text = _("Word study"),
+        id = "quran_word_a_root",
+        row_group = "quran_word_study",
+        text = _("Root explorer"),
         conditional = true,
         show_func = function(popup)
-            -- Our custom ayah/overview popups replace the layout
-            -- wholesale and never reach the button pool; this only
-            -- sees word popups. D-R3-2 ext: popup-layer knob.
-            -- ⑤C: bookless is eligible — the hub is browser-based.
-            if not quranChromeEligible(quran) then return false end
-            if quran._popupButtonOn
-                    and not quran:_popupButtonOn("wordstudy") then
-                return false
-            end
-            local root, word_id = quran:_popupWordInfo(popup)
-            return (root or word_id) ~= nil
+            local root = info(popup)
+            return root ~= nil
         end,
-        callback = function(popup)
-            local root, word_id = quran:_popupWordInfo(popup)
-            if not (root or word_id) then return end
-            local surface = popup.word
-            popup:onClose()
-            quran:openWordStudy(root, word_id, surface)
+        callback = function(popup) jump(popup, "root") end,
+    }
+    self.ui.dictionary:addToDictButtons{
+        id = "quran_word_b_occurrences",
+        row_group = "quran_word_study",
+        text = _("Occurrences"),
+        conditional = true,
+        show_func = function(popup)
+            local root = info(popup)
+            return root ~= nil
         end,
+        callback = function(popup) jump(popup, "occurrences") end,
+    }
+    self.ui.dictionary:addToDictButtons{
+        id = "quran_word_c_grammar",
+        row_group = "quran_word_study",
+        text = _("Word grammar"),
+        conditional = true,
+        show_func = function(popup)
+            local _root, word_id = info(popup)
+            return word_id ~= nil
+        end,
+        callback = function(popup) jump(popup, "grammar") end,
     }
 end
 
@@ -1302,82 +1333,49 @@ function Quran:_popupWordInfo(popup)
     end
 end
 
---- The word-study hub (R4 unification): one compact launcher for
--- everything word-level — Root explorer, traditional i'rab (MASAQ),
--- the root's occurrences. Rows dim when their data package is absent
--- (F19 idiom — visible, honest). The popup beneath already showed the
--- EQTB summary; the title re-anchors with surface + root.
-function Quran:openWordStudy(root, word_id, surface)
-    local UIManager = require("ui/uimanager")
-    local ButtonDialog = require("ui/widget/buttondialog")
+--- ND-20 (owner 2026-07-26): the word-study door opens the BROWSER
+-- word-study landing page (the old hub popup became a browser screen —
+-- Browser:showWordStudy), optionally continuing straight into one of
+-- its targets with the landing pushed beneath: target = "root" |
+-- "occurrences" | "grammar" (the MASAQ view pops OVER the landing —
+-- grammar is popup-locked). ← from any target lands on the word page.
+function Quran:openWordStudy(root, word_id, surface, target)
+    local actions = self:_actionsModule()
+    if not (actions and actions.showBrowser) then return end
     local quran = self
-    local roots = self:_rootsModule()
-    local masaq = self:_masaqModule()
-    local masaq_ok = (word_id and masaq
-        and (masaq._db_path or masaq.findDb(self))) and true or false
-    local totals = root and roots and roots.totalsMap
-        and roots.totalsMap(self)
-    local occ = totals and totals[root]
-    local dialog
-    local function close_then(fn)
-        return function()
-            UIManager:close(dialog)
-            fn()
+    actions.showBrowser(self, function(browser)
+        if browser.showWordStudy then
+            browser:showWordStudy(root, word_id, surface)
         end
-    end
-    local buttons = { {
-        {
-            text = _("Root explorer"),
-            font_bold = false,
-            enabled = root ~= nil,
-            callback = close_then(function()
-                quran:openRootExplorer(root, word_id)
-            end),
-        },
-        {
-            text = _("Word grammar (MASAQ)"),
-            font_bold = false,
-            enabled = masaq_ok,
-            callback = close_then(function()
-                quran:openMasaqWord(word_id)
-            end),
-        },
-    }, {
-        {
-            text = occ and string.format("%s ×%d", _("Occurrences"), occ.words)
-                or _("Occurrences"),
-            font_bold = false,
-            enabled = occ ~= nil,
-            callback = close_then(function()
-                local actions = quran:_actionsModule()
-                if not (actions and actions.showBrowser) then return end
-                actions.showBrowser(quran, function(browser)
-                    roots.showOccurrences(browser, root)
-                end)
-            end),
-        },
-        {
-            text = _("Close"),
-            font_bold = false,
-            callback = function() UIManager:close(dialog) end,
-        },
-    } }
-    local title_bits = {}
-    if surface and surface ~= "" then table.insert(title_bits, surface) end
-    if root then table.insert(title_bits, roots.dashRoot(root)) end
-    dialog = ButtonDialog:new{
-        title = #title_bits > 0
-            and table.concat(title_bits, " — ") or _("Word study"),
-        title_align = "center",
-        buttons = buttons,
-    }
-    UIManager:show(dialog)
+        if target == "root" and root then
+            local roots = browser:rootsModule()
+            if roots and roots.showRoot then
+                roots.showRoot(browser, root,
+                    word_id and { word_id = word_id } or nil)
+            end
+        elseif target == "occurrences" and root then
+            local roots = browser:rootsModule()
+            if roots and roots.showOccurrences then
+                roots.showOccurrences(browser, root)
+            end
+        elseif target == "grammar" and word_id then
+            -- Over the landing: the bare-arrow browser convention
+            -- (D-R3-8), not the Reader's "← Book" default — closing
+            -- it must read as one-level-up to the word page beneath.
+            quran:openMasaqWord(word_id,
+                browser.backLabel and browser:backLabel() or "\226\134\144")
+        end
+    end)
 end
 
---- Open the MASAQ word view for a spine word_id (the hub's i'rab row).
-function Quran:openMasaqWord(word_id)
+--- Open the MASAQ word view for a spine word_id. back_label: nil = the
+-- Reader's "← Book" default (opened over the book); pass the browser's
+-- bare arrow when a browser screen sits beneath (ND-20 landing).
+function Quran:openMasaqWord(word_id, back_label)
     local masaq = self:_masaqModule()
-    if masaq and masaq.openWord then masaq.openWord(self, word_id) end
+    if masaq and masaq.openWord then
+        masaq.openWord(self, word_id, back_label)
+    end
 end
 
 --- Lazy-load the actions module (dispatcher actions + quick panel).
@@ -2693,30 +2691,40 @@ function Quran:_filterWordResultsByPosition(results)
     return results
 end
 
---- Append the "Word study" row to WORD popups (R4 unification).
--- PRE-2026.05 KOREADER ONLY (the DictButtonsReady append path); newer
--- versions register via _registerWordStudyDictButton instead. Unlike
--- the ayah/overview popups, the default buttons stay — this only adds
--- a row. Info is re-read from the DISPLAYED result at tap time (◀▶
--- may have switched dictionaries).
+--- Append the word-level buttons to WORD popups (R4 unification;
+-- ND-20 three inline buttons). PRE-2026.05 KOREADER ONLY (the
+-- DictButtonsReady append path); newer versions register via
+-- _registerWordStudyDictButton instead. Unlike the ayah/overview
+-- popups, the default buttons stay — this only adds a row. Info is
+-- re-read from the DISPLAYED result at tap time (◀▶ may have switched
+-- dictionaries).
 function Quran:_maybeAddWordStudyButton(dict_popup, row)
-    -- ⑤C: bookless is eligible — the hub is browser-based.
+    -- ⑤C: bookless is eligible — the surfaces are browser-based.
     if not quranChromeEligible(self) then return end
     -- D-R3-2 ext: popup-layer knob (off via its settings toggle)
     if self._popupButtonOn and not self:_popupButtonOn("wordstudy") then return end
     local root, word_id = self:_popupWordInfo(dict_popup)
     if not (root or word_id) then return end
-    table.insert(row, {
-        id = "quran_word_study",
-        text = _("Word study"),
-        callback = function()
-            local r2, w2 = self:_popupWordInfo(dict_popup)
+    local quran = self
+    local function jump(target)
+        return function()
+            local r2, w2 = quran:_popupWordInfo(dict_popup)
             if not (r2 or w2) then return end
             local surface = dict_popup.word
             dict_popup:onClose()
-            self:openWordStudy(r2, w2, surface)
-        end,
-    })
+            quran:openWordStudy(r2, w2, surface, target)
+        end
+    end
+    if root then
+        table.insert(row, { id = "quran_word_a_root",
+            text = _("Root explorer"), callback = jump("root") })
+        table.insert(row, { id = "quran_word_b_occurrences",
+            text = _("Occurrences"), callback = jump("occurrences") })
+    end
+    if word_id then
+        table.insert(row, { id = "quran_word_c_grammar",
+            text = _("Word grammar"), callback = jump("grammar") })
+    end
 end
 
 --- Read the group-range comment from the result the popup is displaying.
@@ -3201,11 +3209,15 @@ function Quran:_installedTafsirs()
 end
 
 --- D-R3-2: effective open target for a content kind (tafsir, grammar,
--- irab, asbab, overview). A per-item override in settings wins
--- ("popup" / "reader"); otherwise the quick-panel MODE decides:
--- Minimal popups (né Simple mode, key quran_simple_mode) → the dict
--- popup, default → full screen.
+-- irab, asbab, overview). Grammar-family kinds are LOCKED to the dict
+-- popup (owner 2026-07-26: the Reader renders dense grammar tables
+-- poorly until D-R3-21 Reader-HTML; from the Explorer the popup opens
+-- OVER it, never closing it). For the rest, a per-item override in
+-- settings wins ("popup" / "reader"); otherwise Minimal popups (né
+-- Simple mode, key quran_simple_mode) → the dict popup, default →
+-- full screen.
 function Quran:_openTargetFor(kind)
+    if kind == "grammar" or kind == "irab" then return "popup" end
     local s = self.settings
     local override = s and s:readSetting("open_target_" .. (kind or ""))
     if override == "popup" or override == "reader" then return override end
@@ -4116,6 +4128,12 @@ function Quran:onQuranBrowser()
     return true
 end
 
+function Quran:onQuranGotoAyah()
+    local mod = self:_actionsModule()
+    if mod then mod.showGotoAyah(self) end
+    return true
+end
+
 -- Teardown: the quick panel, tafsir picker, and ayah card are top-level
 -- widgets shown with UIManager:show and are otherwise only dismissed by
 -- user action. When the document/reader closes, ReaderUI is torn down
@@ -4124,7 +4142,8 @@ end
 -- Close whatever is still live here. (onCloseWidget fires on our own
 -- teardown; onCloseDocument on the document swap — cover both.)
 function Quran:_closeStrayDialogs()
-    for _, key in ipairs({ "_quick_panel_dialog", "_tafsir_picker", "_ayah_card" }) do
+    for _, key in ipairs({ "_quick_panel_dialog", "_tafsir_picker",
+            "_ayah_card", "_goto_dialog" }) do
         local dlg = self[key]
         if dlg then
             pcall(function() UIManager:close(dlg) end)
@@ -4759,7 +4778,7 @@ function Quran:addToMainMenu(menu_items)
                                 .. (self.settings:isTrue("quran_simple_mode")
                                     and "  ✓" or "")
                         end,
-                        help_text = _("Ayah resources open in the quick dictionary popup by default instead of full-screen reading windows. Nothing is removed — every advanced view stays reachable. Also toggleable in the quick panel."),
+                        help_text = _("Ayah resources open in the quick dictionary popup by default instead of full-screen reading windows. Nothing is removed: every advanced view stays reachable. Grammar and I'rab always use the popup regardless. Also toggleable in the quick panel."),
                         checked_func = function()
                             return self.settings:isTrue("quran_simple_mode")
                         end,
@@ -4774,20 +4793,41 @@ function Quran:addToMainMenu(menu_items)
                         help_text = _("Where each resource opens (full screen or the dictionary popup) and which buttons the popup carries."),
                         sub_item_table = (function()
                             local items = {}
+                            -- Owner 2026-07-26: grammar-family kinds are
+                            -- LOCKED to the popup (see _openTargetFor);
+                            -- their rows say so instead of offering a
+                            -- radio that would not be honored.
                             local kinds = {
                                 { key = "tafsir", label = _("Tafsir") },
-                                { key = "grammar", label = _("Grammar") },
-                                { key = "irab", label = _("I'rab") },
+                                { key = "grammar", label = _("Grammar"), locked = true },
+                                { key = "irab", label = _("I'rab"), locked = true },
                                 { key = "asbab", label = _("Asbab al-Nuzul") },
                                 { key = "overview", label = _("Surah overview") },
                             }
+                            -- "Automatic", not "Follow mode" (owner
+                            -- 2026-07-26: there is no mode to follow,
+                            -- just the Minimal-popups default flip).
                             local targets = {
-                                { value = nil, label = _("Follow mode") },
+                                { value = nil, label = _("Automatic (full screen; popup when Minimal popups is on)") },
                                 { value = "reader", label = _("Full screen") },
                                 { value = "popup", label = _("Dictionary popup") },
                             }
+                            local lock_help = _("Locked to the dictionary popup for now: the full-screen Reader renders grammar tables poorly. From the Explorer, the popup opens on top without closing it.")
                             for _i, k in ipairs(kinds) do
                                 local kk = k.key
+                                if k.locked then
+                                    table.insert(items, {
+                                        text = k.label .. " " .. _("opens in")
+                                            .. ": " .. _("popup (locked)"),
+                                        help_text = lock_help,
+                                        keep_menu_open = true,
+                                        callback = function()
+                                            local InfoMessage = require("ui/widget/infomessage")
+                                            local UIManager = require("ui/uimanager")
+                                            UIManager:show(InfoMessage:new{ text = lock_help })
+                                        end,
+                                    })
+                                else
                                 local sub = {}
                                 for _j, t in ipairs(targets) do
                                     local tv = t.value
@@ -4809,7 +4849,7 @@ function Quran:addToMainMenu(menu_items)
                                     text_func = function()
                                         local cur = self.settings:readSetting(
                                             "open_target_" .. kk)
-                                        local label = _("follow mode")
+                                        local label = _("automatic")
                                         if cur == "reader" then
                                             label = _("full screen")
                                         elseif cur == "popup" then
@@ -4820,6 +4860,7 @@ function Quran:addToMainMenu(menu_items)
                                     end,
                                     sub_item_table = sub,
                                 })
+                                end
                             end
                             items[#items].separator = true
                             -- popup-layer knobs (per-button, independent of
@@ -4828,10 +4869,11 @@ function Quran:addToMainMenu(menu_items)
                             local btns = {
                                 { key = "explore", label = _("Explorer button") },
                                 { key = "readfull", label = _("Full screen button") },
-                                -- R4 unification: one Word study door replaced
-                                -- the root/masaq buttons (their old popup_btn_*
-                                -- keys are simply unread now)
-                                { key = "wordstudy", label = _("Word study button") },
+                                -- R4 unification + ND-20: the word-level door
+                                -- is the inline Root explorer / Occurrences /
+                                -- Word grammar trio; ONE shared knob (key
+                                -- unchanged) shows or hides all three
+                                { key = "wordstudy", label = _("Word study buttons") },
                             }
                             for _i, b in ipairs(btns) do
                                 local bk = b.key

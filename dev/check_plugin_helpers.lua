@@ -1141,24 +1141,40 @@ do
         "mybooks: library-wide 'Check all books for updates' row present")
     local banner, edrow, oldrow
     for _i, it in ipairs(items) do
-        if it.text:find("Updates available", 1, true) then banner = it end
+        -- pre-check honest label (updatev2): only renamed editions are
+        -- known before a check ran, and the banner says so
+        if it.text:find("Renamed editions", 1, true) then banner = it end
         if it.text:sub(1, 3) == "Ed " then edrow = it end
         if it.text:find("Old Ed", 1, true) then oldrow = it end
     end
-    eq(banner ~= nil, true, "mybooks: outdated banner shown when a book has an update")
+    eq(banner ~= nil, true, "mybooks: renamed-editions banner shown pre-check")
     eq(edrow.text, "Ed \194\183 English \194\183 L",
         "mybooks: row uses the canonical dot-joined title (no em-dash)")
     eq(edrow.mandatory, nil, "mybooks: no progress indicator (owner 2026-07-22)")
     eq(oldrow.mandatory, "\226\154\160", "mybooks: an outdated row flags ⚠ in the column")
-    -- tap opens the book (closeThen returns the callback; the earlier bug
-    -- wrapped+discarded it so tapping did nothing)
+    -- tap opens the UNIFIED BOOK DIALOG (owner 2026-07-26); its Open
+    -- button routes closeThen -> ReaderUI (the direct-open behavior sits
+    -- one honest tap deeper now)
     local opened
     package.preload["apps/reader/readerui"] = function()
         return { showReader = function(_, p) opened = p end }
     end
     package.loaded["apps/reader/readerui"] = nil
+    local prev_bd = package.preload["ui/widget/buttondialog"]
+    local bdlg
+    package.preload["ui/widget/buttondialog"] = function()
+        return { new = function(_, spec) bdlg = spec; return spec end }
+    end
+    package.loaded["ui/widget/buttondialog"] = nil
+    package.preload["ui/widget/confirmbox"] = package.preload["ui/widget/confirmbox"]
+        or function() return { new = function(_, s) return s end } end
     edrow.callback()
-    eq(opened, "/d/new.epub", "mybooks: tapping a book opens it in the reader")
+    eq(bdlg ~= nil, true, "mybooks: tapping a row opens the unified book dialog")
+    eq(bdlg.buttons[1][1].text, "Open", "mybooks: Open leads the dialog")
+    bdlg.buttons[1][1].callback()
+    eq(opened, "/d/new.epub", "mybooks: dialog Open opens the book in the reader")
+    package.preload["ui/widget/buttondialog"] = prev_bd
+    package.loaded["ui/widget/buttondialog"] = nil
     -- offline: no cached catalog -> a fetch-catalog row appears
     QAS._catalog = nil
     local off, hasfetch = QAS.myBooksItems(fake), false
@@ -1167,6 +1183,120 @@ do
     end
     eq(hasfetch, true, "mybooks: offline (no cached catalog) shows a fetch-catalog row")
     QAS.bookInventory, QAS._catalog = saved_inv, saved_cat
+end
+
+-- Library-wide update pass v2 (owner 2026-07-26): the list's ⚠/banner and
+-- the check's results now read the SAME state, so "list said 1, check said
+-- more" can't recur; the results screen is one-tap update-in-place (the
+-- pass promised at the 2026-07-22 check-all build); the My-books frame
+-- beneath the results screen is rewritten after updates (the F30 engine
+-- restores stored items verbatim, so a stale frame resurrects old markers).
+do
+    -- updatePlan (pure): renamed comes free, content only via the hash fn;
+    -- current/unmatched books produce nothing
+    local precs = {
+        { filename = "old.epub", title = "Renamed", outdated = true },
+        { filename = "same.epub", title = "Same",
+          variant = { sha256 = "aaa" }, path = "/d/same.epub" },
+        { filename = "changed.epub", title = "Changed",
+          variant = { sha256 = "bbb", size = 10 }, path = "/d/changed.epub" },
+        { filename = "unknown.epub", title = "Unknown" },
+    }
+    local plan = QAS.updatePlan(precs, function(r)
+        return r.filename == "changed.epub" and "OTHER" or "aaa"
+    end)
+    eq(#plan.renamed, 1, "updatev2: renamed edition classified")
+    eq(plan.renamed[1].filename, "old.epub", "updatev2: renamed rec is the old-scheme file")
+    eq(#plan.content, 1, "updatev2: sha mismatch classified as a content update")
+    eq(plan.content[1].filename, "changed.epub", "updatev2: content rec is the changed file")
+
+    -- banner + ⚠ sync across the check
+    local saved_inv, saved_cat, saved_cu =
+        QAS.bookInventory, QAS._catalog, QAS._content_updates
+    local inv = {
+        { filename = "a.epub", title = "A", path = "/d/a.epub",
+          variant = { sha256 = "x", size = 5 } },
+        { filename = "old.epub", title = "B old", path = "/d/old.epub",
+          outdated = true, new_name = "new.epub", dir = "/d",
+          variant = { size = 7 } },
+    }
+    QAS.bookInventory = function() return inv end
+    QAS._catalog = { variants = {} }
+    local fake = { quran = {}, nav_stack = {},
+        refreshScreen = function(self, its) self._refreshed = its end,
+        closeThen = function(_, fn) return function() fn() end end }
+    QAS._content_updates = nil
+    local items = QAS.myBooksItems(fake)
+    local pre
+    for _i, it in ipairs(items) do
+        if it.text:find("Renamed editions: 1", 1, true) then pre = it end
+    end
+    eq(pre ~= nil, true, "updatev2: pre-check banner counts renamed editions only")
+    QAS._content_updates = { ["a.epub"] = true }   -- a check ran
+    items = QAS.myBooksItems(fake)
+    local post, arow
+    for _i, it in ipairs(items) do
+        if it.text:find("Updates available: 2", 1, true) then post = it end
+        if it.text == "A" then arow = it end
+    end
+    eq(post ~= nil, true, "updatev2: post-check banner counts renamed + content")
+    eq(arow.mandatory, "\226\154\160", "updatev2: a content-flagged row carries ⚠")
+
+    -- UNIFIED BOOK DIALOG (owner 2026-07-26): one popup from My books /
+    -- Get books rows — Open · Update · Download (again) · Delete ·
+    -- Close, with a version-ready title (catalog `version` = the future
+    -- release tag)
+    local prev_bd = package.preload["ui/widget/buttondialog"]
+    local dlg
+    package.preload["ui/widget/buttondialog"] = function()
+        return { new = function(_, spec) dlg = spec; return spec end }
+    end
+    package.loaded["ui/widget/buttondialog"] = nil
+    package.preload["ui/widget/confirmbox"] = package.preload["ui/widget/confirmbox"]
+        or function() return { new = function(_, s) return s end } end
+    local function btexts()
+        local t = {}
+        for _i, row in ipairs(dlg.buttons) do t[#t + 1] = row[1].text end
+        return table.concat(t, "|")
+    end
+    -- installed + content-flagged: Open leads; Update, Download again,
+    -- Delete, Close follow; ⚠ + version lines in the title
+    local vA = { filename = "a.epub", sha256 = "x", size = 5, version = "0.11.0",
+        axes = { translation = { name = "Ed", language = "en" }, layout_label = "L" } }
+    local recA = { filename = "a.epub", title = "A", path = "/d/a.epub",
+        dir = "/d", variant = vA }
+    QAS.showBookDialog(fake, vA, { rec = recA })
+    eq(dlg.buttons[1][1].text, "Open", "bookdlg: Open leads for an installed book")
+    eq(btexts():find("Update", 1, true) ~= nil, true,
+        "bookdlg: Update row for a content-flagged book")
+    eq(btexts():find("Download again", 1, true) ~= nil, true,
+        "bookdlg: Download again for an installed book")
+    eq(btexts():find("Delete", 1, true) ~= nil, true,
+        "bookdlg: Delete for an installed book")
+    eq(dlg.title:find("Version: 0.11.0", 1, true) ~= nil, true,
+        "bookdlg: version line rendered when the catalog carries one (tag-ready)")
+    eq(dlg.title:find("Update available", 1, true) ~= nil, true,
+        "bookdlg: ⚠ state line for a content update")
+    -- renamed rec: the Update row goes down the renamed-edition route
+    local vB = { filename = "new.epub", old_filename = "old.epub", size = 7,
+        axes = { translation = { name = "B", language = "en" }, layout_label = "L" } }
+    local recB = { filename = "old.epub", title = "B old", path = "/d/old.epub",
+        dir = "/d", outdated = true, new_name = "new.epub", variant = vB }
+    QAS.showBookDialog(fake, vB, { rec = recB })
+    eq(btexts():find("renamed edition", 1, true) ~= nil, true,
+        "bookdlg: renamed-edition Update row")
+    eq(dlg.title:find("Renamed edition available", 1, true) ~= nil, true,
+        "bookdlg: ⚠ state line for a renamed edition")
+    -- unrecognized installed file: Open/Delete/Close only ("as available")
+    QAS.showBookDialog(fake, nil, { rec = { title = "Mystery", path = "/d/m.epub" } })
+    eq(btexts(), "Open|Delete|Close", "bookdlg: unrecognized book = Open/Delete/Close")
+    -- not installed (Get books, no ✓ dir): Download/Close only
+    QAS.showBookDialog(fake, vA, nil)
+    eq(btexts(), "Download|Close", "bookdlg: uninstalled book = Download/Close")
+    package.preload["ui/widget/buttondialog"] = prev_bd
+    package.loaded["ui/widget/buttondialog"] = nil
+    QAS.bookInventory, QAS._catalog, QAS._content_updates =
+        saved_inv, saved_cat, saved_cu
 end
 
 -- Disk-persisted catalog cache (owner 2026-07-22): fetched once, then every
@@ -2285,20 +2415,22 @@ eq(lead0[1], 2, "roots-sum: first GLOSSED entry preferred")
 eq(QR.summaryIndexes({ { seq = 1 } })[1], 1,
     "roots-sum: glossless article still leads with its first entry")
 
--- _registerWordStudyDictButton: the ≥2026.05 word-popup button
--- (extracted live; exercises show_func/callback with the REAL
--- parsers). R4 unification (owner 2026-07-18): ONE "Word study" door
--- replaced the separate Root explorer / Word grammar buttons.
+-- _registerWordStudyDictButton: the ≥2026.05 word-popup buttons
+-- (extracted live; exercises show_func/callback with the REAL parsers).
+-- ND-20 (owner 2026-07-26): the single "Word study" hub door is now
+-- THREE inline buttons — Root explorer · Occurrences · Word grammar —
+-- each deep-linking through the browser word-study landing page.
 do
 local regchunk = "local _ = function(s) return s end\nlocal Quran = {}\n"
-    -- the ⑤C eligibility helper is a main.lua local the button closes over
+    -- the ⑤C eligibility helper is a main.lua local the buttons close over
     .. extract("-- ⑤C popup chrome eligibility",
                "local function applyMonkeyPatches")
-    .. extract("--- Register the word-popup \"Word study\" button",
+    .. extract("--- Register the word-popup buttons (KOReader",
                "--- Detect whether the current book is a quran-ebook EPUB")
     .. "\nreturn Quran\n"
 local REG = assert(loadstring(regchunk))()
-local captured_spec, ws_root, ws_wid, ws_surface, closed
+local specs, ws_root, ws_wid, ws_surface, ws_target, closed
+specs = {}
 local ws_on = true
 local regq = {
     _is_quran_book = true,
@@ -2306,15 +2438,30 @@ local regq = {
     _popupButtonOn = function(_, key) return key ~= "wordstudy" or ws_on end,
     _popupWordInfo = REG._popupWordInfo,
     _registerWordStudyDictButton = REG._registerWordStudyDictButton,
-    openWordStudy = function(_, root, wid, surface)
-        ws_root, ws_wid, ws_surface = root, wid, surface
+    openWordStudy = function(_, root, wid, surface, target)
+        ws_root, ws_wid, ws_surface, ws_target = root, wid, surface, target
     end,
-    ui = { dictionary = { addToDictButtons = function(_, spec) captured_spec = spec end } },
+    ui = { dictionary = { addToDictButtons = function(_, spec)
+        specs[#specs + 1] = spec
+    end } },
 }
 regq:_registerWordStudyDictButton()
-eq(captured_spec ~= nil and captured_spec.id, "quran_word_study",
-    "wordstudy: spec registered via official API")
-eq(captured_spec.conditional, true, "wordstudy: conditional row")
+eq(#specs, 3, "wordstudy: THREE inline buttons registered (ND-20)")
+local by_id = {}
+for _i, s in ipairs(specs) do by_id[s.id] = s end
+-- a_/b_/c_ sort prefix = the within-row order (orderedPairs drives it)
+local b_root = by_id.quran_word_a_root
+local b_occ = by_id.quran_word_b_occurrences
+local b_gram = by_id.quran_word_c_grammar
+eq(b_root ~= nil and b_root.text, "Root explorer", "wordstudy: root button present")
+eq(b_occ ~= nil and b_occ.text, "Occurrences", "wordstudy: occurrences button present")
+eq(b_gram ~= nil and b_gram.text, "Word grammar", "wordstudy: grammar button present")
+eq(b_root.conditional and b_occ.conditional and b_gram.conditional, true,
+    "wordstudy: all three conditional")
+eq(b_root.row_group == "quran_word_study"
+    and b_occ.row_group == "quran_word_study"
+    and b_gram.row_group == "quran_word_study", true,
+    "wordstudy: shared row_group = the trio renders on ONE row")
 local root_def = "x · root: \226\128\142\216\185-\216\176-\216\168</span>"
 local word_popup = {
     results = { { definition = "plain dict entry" }, { definition = root_def } },
@@ -2322,32 +2469,45 @@ local word_popup = {
     word = "displayed-word",
     onClose = function() closed = true end,
 }
-eq(captured_spec.show_func(word_popup), true,
-    "wordstudy: shows when a result has a root")
-eq(captured_spec.show_func({ results = { { definition = "nothing here" } },
+eq(b_root.show_func(word_popup), true,
+    "wordstudy: root button shows when a result has a root")
+eq(b_occ.show_func(word_popup), true,
+    "wordstudy: occurrences button rides the root")
+eq(b_gram.show_func(word_popup), false,
+    "wordstudy: grammar button needs an instance ref")
+eq(b_root.show_func({ results = { { definition = "nothing here" } },
     dict_index = 1 }), false,
     "wordstudy: hidden on rootless refless popups (ayah/tafsir)")
-eq(captured_spec.show_func({ results = { { definition = "<!-- ref:2:255:5 -->x" } },
-    dict_index = 1 }), true,
-    "wordstudy: a bare instance ref is enough (masaq row still reachable)")
--- ⑤C contract: hidden in a NON-Quran BOOK, shown BOOKLESS (the hub is
--- browser-based; FileManager lookups of Quran words get the door too)
+local ref_popup = { results = { { definition = "<!-- ref:2:255:5 -->x" } },
+    dict_index = 1 }
+eq(b_gram.show_func(ref_popup), true,
+    "wordstudy: a bare instance ref shows the grammar button")
+eq(b_root.show_func(ref_popup), false,
+    "wordstudy: rootless ref hides the root/occurrence buttons")
+-- ⑤C contract: hidden in a NON-Quran BOOK, shown BOOKLESS (the surfaces
+-- are browser-based; FileManager lookups of Quran words get them too)
 regq._is_quran_book = false
 regq.ui.document = {}          -- a non-Quran book is open
-eq(captured_spec.show_func(word_popup), false, "wordstudy: hidden in non-Quran books")
+eq(b_root.show_func(word_popup), false, "wordstudy: hidden in non-Quran books")
 regq.ui.document = nil         -- bookless (the FileManager instance)
-eq(captured_spec.show_func(word_popup), true, "wordstudy: shown bookless (⑤C)")
+eq(b_root.show_func(word_popup), true, "wordstudy: shown bookless (⑤C)")
 regq._is_quran_book = true
 ws_on = false
-eq(captured_spec.show_func(word_popup), false,
-    "wordstudy: per-button toggle respected (popup_btn_wordstudy)")
+eq(b_root.show_func(word_popup), false,
+    "wordstudy: the shared wordstudy knob hides the trio")
+eq(b_gram.show_func(ref_popup), false,
+    "wordstudy: knob covers the grammar button too")
 ws_on = true
-captured_spec.callback(word_popup)
+b_root.callback(word_popup)
 eq(closed, true, "wordstudy: callback closes the popup")
-eq(ws_root, "عذب", "wordstudy: displayed result's root threaded to the hub")
+eq(ws_root, "عذب", "wordstudy: displayed result's root threaded through")
 eq(ws_wid, nil, "wordstudy: no instance ref → no word_id")
 eq(ws_surface, "displayed-word",
-    "wordstudy: popup surface threaded for the hub title")
+    "wordstudy: popup surface threaded for the landing title")
+eq(ws_target, "root", "wordstudy: root button targets the root explorer")
+b_occ.callback(word_popup)
+eq(ws_target, "occurrences",
+    "wordstudy: occurrences button targets the occurrence list")
 
 -- the instance ref rides along as the morphology word_id (B2 landing)
 do
@@ -2357,13 +2517,14 @@ do
         "wordstudy: multi-instance entry uses its first ref")
     eq(QR.parseRefWordId("no comment here"), nil, "wordstudy: refless def → nil")
     local ref_def = "<!-- ref:79:11:3 -->bones · root: \226\128\142\216\185-\216\184-\217\133</span>"
-    captured_spec.callback({
+    b_gram.callback({
         results = { { definition = ref_def } },
         dict_index = 1,
         onClose = function() end,
     })
     eq(ws_root, "عظم", "wordstudy: ref-carrying entry threads its root")
-    eq(ws_wid, 79011003, "wordstudy: word_id threaded to the hub")
+    eq(ws_wid, 79011003, "wordstudy: word_id threaded through")
+    eq(ws_target, "grammar", "wordstudy: grammar button targets the MASAQ view")
 
     -- applyTotals (pure): measured totals decorate + re-rank the row lists
     local at_rows = {
@@ -2377,6 +2538,67 @@ do
     QR.applyTotals(at_rows, nil, true)
     eq(at_rows[1].arabic, "a", "totals: nil map is a no-op")
 end
+end
+
+-- ND-20: the browser word-study LANDING page — the popup's three inline
+-- buttons deep-link THROUGH it (pushed beneath their targets), so ←
+-- from any word-level surface lands here; the grammar row opens the
+-- MASAQ view OVER the page (grammar is popup-locked)
+do
+    -- Browser methods live on instances (QB.show), so capture the method
+    -- off a live instance and drive it against a stubbed self
+    local WS
+    QB.show(bq, QA, function(b) WS = b.showWordStudy end)
+    eq(type(WS), "function", "ws-landing: method captured off a live browser")
+    local nav = {}
+    local masaq_word, masaq_bl
+    local wq = { openMasaqWord = function(_, wid, bl)
+        masaq_word, masaq_bl = wid, bl
+    end }
+    local occ_for
+    local fakeb = {
+        quran = wq,
+        backLabel = function() return "\226\134\144" end,   -- ←
+        rootsModule = function() return {
+            totalsMap = function() return { ["عذب"] = { words = 42 } } end,
+            dashRoot = function(r) return r end,
+            showRoot = function() end,
+            showOccurrences = function(_, r) occ_for = r end,
+        } end,
+        masaqModule = function() return { findDb = function() return "/db" end } end,
+        navigateForward = function(_, title, items)
+            nav.title, nav.items = title, items
+        end,
+        showWordStudy = WS,
+    }
+    fakeb:showWordStudy("عذب", 2005003, "surface-word")
+    eq(nav.title, "surface-word \194\183 عذب",
+        "ws-landing: title = surface · root (no em dash)")
+    eq(#nav.items, 3, "ws-landing: Root explorer / Occurrences / Word grammar rows")
+    eq(nav.items[1].text, "Root explorer", "ws-landing: root row leads")
+    eq(nav.items[2].mandatory, "\195\151" .. "42",
+        "ws-landing: honest ×count on the occurrences row")
+    nav.items[2].callback()
+    eq(occ_for, "عذب", "ws-landing: occurrences row opens the occurrence list")
+    nav.items[3].callback()
+    eq(masaq_word, 2005003,
+        "ws-landing: grammar row opens the MASAQ view over the page")
+    eq(masaq_bl, "\226\134\144",
+        "ws-landing: MASAQ view gets the bare-arrow back label, not Book")
+    -- no data: rows dim, none hidden (F19 stable-shape idiom)
+    local nav2
+    local fb2 = {
+        quran = wq,
+        backLabel = function() return "\226\134\144" end,
+        rootsModule = function() return nil end,
+        masaqModule = function() return nil end,
+        navigateForward = function(_, t, its) nav2 = its end,
+        showWordStudy = WS,
+    }
+    fb2:showWordStudy(nil, nil, "w")
+    eq(#nav2, 3, "ws-landing: stable 3-row shape without data")
+    eq(nav2[1].dim and nav2[2].dim and nav2[3].dim, true,
+        "ws-landing: dataless rows dim, not hidden")
 end
 
 -- D-R3-19: the bookless go-to seam (extracted live) — openBookAt
@@ -4316,9 +4538,17 @@ tset.open_target_tafsir = "reader"
 eq(tgq:_openTargetFor("tafsir"), "reader",
     "d-r3-2: per-item override beats the mode")
 tset.quran_simple_mode = nil
-tset.open_target_grammar = "popup"
+-- Owner 2026-07-26: grammar-family kinds are LOCKED to the popup (Reader
+-- renders grammar tables poorly until D-R3-21); overrides are ignored
+tset.open_target_grammar = nil
 eq(tgq:_openTargetFor("grammar"), "popup",
-    "d-r3-2: popup override active in browser mode")
+    "open-lock: grammar always popup (no setting)")
+tset.open_target_grammar = "reader"
+eq(tgq:_openTargetFor("grammar"), "popup",
+    "open-lock: grammar popup even against a reader override")
+eq(tgq:_openTargetFor("irab"), "popup",
+    "open-lock: irab locked to popup too")
+tset.open_target_grammar = "popup"
 eq(tgq:_popupButtonOn("explore"), true, "d-r3-2: popup buttons default on")
 tset.popup_btn_explore = false
 eq(tgq:_popupButtonOn("explore"), false, "d-r3-2: per-button toggle wins")
@@ -4933,62 +5163,65 @@ else
 end
 end
 
--- The word-study hub (R4 unification): re-extract openWordStudy (the
--- top-of-file REG local is out of scope here) and pin the hub shape —
--- 2×2 grid, rows dim without their data, title = surface — root
+-- ND-20 deep-link routing: openWordStudy re-extracted (the top-of-file
+-- REG local is out of scope here) — every route pushes the browser
+-- word-study LANDING page beneath its target, so ← lands one level up;
+-- the grammar target opens the MASAQ view OVER the landing
 do
     local wschunk = "local _ = function(s) return s end\nlocal Quran = {}\n"
-        .. extract("--- The word-study hub (R4 unification)",
+        .. extract("--- ND-20 (owner 2026-07-26): the word-study door",
                    "--- Open the MASAQ word view")
         .. "\nreturn Quran\n"
     local WS = assert(loadstring(wschunk))()
-    local QRh = dofile(PLUGIN_DIR .. "/quran_roots.lua")
-    local hubq = {
+    local land_log, masaq_wid, masaq_bl2, fake_browser
+    local wsq = {
         openWordStudy = WS.openWordStudy,
-        _rootsModule = function() return QRh end,
-        _masaqModule = function() return { _db_path = "x" } end,
+        openMasaqWord = function(_, wid, bl) masaq_wid, masaq_bl2 = wid, bl end,
         _actionsModule = function()
-            return { showBrowser = function() end }
+            return { showBrowser = function(_q, land)
+                if land then land(fake_browser) end
+            end }
         end,
-        openRootExplorer = function() end,
-        openMasaqWord = function() end,
     }
-    local real_totals = QRh.totalsMap
-    QRh.totalsMap = function() return nil end
-    hubq:openWordStudy("عذب", 2255005, "عَذَابِ")
-    local hub = _shown
-    eq(hub.title:find("عَذَابِ", 1, true) ~= nil, true,
-        "wshub: title carries the surface")
-    eq(hub.title:find("ع-ذ-ب", 1, true) ~= nil, true,
-        "wshub: title carries the dashed root")
-    eq(#hub.buttons, 2, "wshub: 2x2 grid")
-    eq(hub.buttons[1][1].text, "Root explorer", "wshub: root row first")
-    eq(hub.buttons[1][1].enabled, true, "wshub: root row live with a root")
-    eq(hub.buttons[1][2].text, "Word grammar (MASAQ)", "wshub: masaq row")
-    eq(hub.buttons[1][2].enabled, true, "wshub: masaq row live with the pack")
-    eq(hub.buttons[2][1].text, "Occurrences", "wshub: occurrences row")
-    eq(hub.buttons[2][1].enabled, false,
-        "wshub: occurrences dim without morphology")
-    eq(hub.buttons[2][2].text, "Close", "wshub: Close is the grid's last cell")
-    QRh.totalsMap = function()
-        return { ["عذب"] = { words = 322, forms = 9 } }
+    local function freshBrowser()
+        land_log = {}
+        fake_browser = {
+            backLabel = function() return "\226\134\144" end,   -- ←
+            showWordStudy = function(_, root, wid, surface)
+                land_log[#land_log + 1] = { "landing", root, wid, surface }
+            end,
+            rootsModule = function() return {
+                showRoot = function(_, root, o)
+                    land_log[#land_log + 1] = { "root", root, o and o.word_id }
+                end,
+                showOccurrences = function(_, root)
+                    land_log[#land_log + 1] = { "occ", root }
+                end,
+            } end,
+        }
     end
-    hubq:openWordStudy("عذب", nil, nil)
-    hub = _shown
-    eq(hub.buttons[2][1].text, "Occurrences ×322",
-        "wshub: honest ×count on the row")
-    eq(hub.buttons[2][1].enabled, true,
-        "wshub: occurrences live with morphology")
-    eq(hub.buttons[1][2].enabled, false, "wshub: masaq dim without a word_id")
-    hubq._masaqModule = function()
-        return { findDb = function() return nil end }
-    end
-    hubq:openWordStudy(nil, 2255005, nil)
-    hub = _shown
-    eq(hub.buttons[1][1].enabled, false, "wshub: root row dim without a root")
-    eq(hub.buttons[1][2].enabled, false, "wshub: masaq dim without the pack")
-    eq(hub.title, "Word study", "wshub: bare title when nothing to anchor")
-    QRh.totalsMap = real_totals
+    freshBrowser()
+    wsq:openWordStudy("عذب", 2255005, "عَذَابِ", "root")
+    eq(#land_log, 2, "wsroute: landing pushed beneath the root screen")
+    eq(land_log[1][1], "landing", "wsroute: landing goes FIRST (← lands on it)")
+    eq(land_log[1][2], "عذب", "wsroute: landing gets the root")
+    eq(land_log[1][4], "عَذَابِ", "wsroute: landing gets the surface")
+    eq(land_log[2][1], "root", "wsroute: then the root explorer")
+    eq(land_log[2][3], 2255005, "wsroute: B2 word_id rides to the root landing")
+    freshBrowser()
+    wsq:openWordStudy("عذب", nil, "w", "occurrences")
+    eq(land_log[2] and land_log[2][1], "occ",
+        "wsroute: occurrences target lands the occurrence list")
+    freshBrowser()
+    masaq_wid = nil
+    wsq:openWordStudy(nil, 2255005, "w", "grammar")
+    eq(#land_log, 1, "wsroute: grammar keeps only the landing in the browser")
+    eq(masaq_wid, 2255005, "wsroute: MASAQ view opened over the landing")
+    eq(masaq_bl2, "\226\134\144",
+        "wsroute: grammar view carries the browser bare-arrow back label")
+    freshBrowser()
+    wsq:openWordStudy("عذب", nil, "w")   -- no target
+    eq(#land_log, 1, "wsroute: no target = just the landing page")
 end
 
 -- ROUND 3 fixes (owner feedback 2026-07-17, design doc §ROUND 3 F7–F12)
@@ -5223,6 +5456,8 @@ do
     eq(pj:find("All resources", 1, true), nil, "r3-panel: no ayah-scoped resources row")
     eq(_shown.buttons[1][1].text:find("This surah", 1, true), 1,
         "r3-panel: This surah launcher leads")
+    eq(pj:find("Go to ayah", 1, true) ~= nil, true,
+        "goto: navigator row on the in-book panel (D-R4-10)")
     eq(pj:find("Search", 1, true) ~= nil, true, "r3-panel: Search launcher")
     eq(pj:find("Explorer", 1, true) ~= nil, true,
         "r3-panel: Explorer launcher (F31 rename)")
@@ -5337,9 +5572,11 @@ do
         for _j, b in ipairs(r) do table.insert(ptexts, b.text) end
     end
     local pj = table.concat(ptexts, "|")
-    eq(#ptexts, 5, "bl-panel: five launcher cells (no Close — the X closes)")
+    eq(#ptexts, 6, "bl-panel: six launcher cells (no Close — the X closes)")
     eq(ptexts[1]:find("Open Quran book", 1, true), 1,
         "bl-panel: Open Quran book leads (the D-R3-19 seam)")
+    eq(pj:find("Go to ayah", 1, true) ~= nil, true,
+        "bl-panel: Go to ayah row bookless too (the seam opens the book)")
     eq(pj:find("Explorer", 1, true) ~= nil, true, "bl-panel: Explorer row (F31)")
     eq(pj:find("Search", 1, true) ~= nil, true, "bl-panel: Search row")
     eq(pj:find("Library & assets", 1, true) ~= nil, true, "bl-panel: Library & assets row")
@@ -5351,6 +5588,100 @@ do
     QA.showQuickPanel({ ui = { document = {} } })  -- a non-Quran BOOK
     eq(_shown.icon, "notice-warning", "bl-panel: non-Quran book still refuses the panel")
     eq(_shown.buttons, nil, "bl-panel: refusal shows a notice, not a dialog")
+end
+
+-- D-R4-10 quick surah/ayah navigator (owner shape call 2026-07-26: two
+-- picker columns, surah left with names / ayah right clamped per surah).
+-- Pure pieces run here; the widget itself (quran_goto.lua) only
+-- constructs under the real stack, so the dialog class is
+-- harness-overridable like _panelDialogClass.
+do
+    local set = {}
+    local q = {
+        settings = {
+            readSetting = function(_, k) return set[k] end,
+            nilOrTrue = function(_, k) return set[k] ~= false end,
+            isTrue = function(_, k) return set[k] == true end,
+            saveSetting = function(_, k, v) set[k] = v end,
+            delSetting = function(_, k) set[k] = nil end,
+            flush = function() end,
+        },
+        surahName = function(_, s) return "Name" .. s end,
+        surahNameArabic = function(_, s) return "ARB" .. s end,
+    }
+    -- labels: 114 rows, "N · name"; script follows surah_display, with
+    -- "auto" following the juz format's script (_buildDisplayString rule)
+    local L = QA.gotoSurahLabels(q)
+    eq(#L, 114, "goto: one label per surah")
+    eq(L[36], "36 \194\183 Name36", "goto: latin label by default (auto, latin juz)")
+    set.surah_display = "arabic"
+    eq(QA.gotoSurahLabels(q)[1], "1 \194\183 ARB1",
+        "goto: arabic labels when surah_display = arabic")
+    set.surah_display = "auto"
+    set.juz_display = "name_arabic"
+    eq(QA.gotoSurahLabels(q)[1], "1 \194\183 ARB1",
+        "goto: auto follows an arabic juz format")
+    set.surah_display, set.juz_display = nil, nil
+
+    -- routing: in a Quran book = the riwayah-converting in-book jump;
+    -- anywhere else = the openBookAt seam (never a book reopen in-book)
+    local jumped, opened
+    q._is_quran_book = true
+    q._gotoAyahInBook = function(_, s, a) jumped = s .. ":" .. a end
+    q.openBookAt = function(_, s, a) opened = s .. ":" .. a end
+    QA.gotoAyahGo(q, 36, 12)
+    eq(jumped, "36:12", "goto: in-book routes through _gotoAyahInBook")
+    eq(opened, nil, "goto: in-book does NOT reopen the book")
+    q._is_quran_book = nil
+    QA.gotoAyahGo(q, 2, 255)
+    eq(opened, "2:255", "goto: bookless routes through the openBookAt seam")
+
+    -- showGotoAyah: dialog spec, Go wiring, stray-teardown ref lifecycle
+    local counts = {}
+    for i = 1, 114 do counts[i] = 200 end
+    q._hafsCounts = function() return counts end
+    local saved_cls = QA._gotoDialogClass
+    local spec
+    QA._gotoDialogClass = function()
+        return { new = function(_, s) spec = s; return s end }
+    end
+    QA.showGotoAyah(q)
+    eq(spec ~= nil, true, "goto: dialog constructed")
+    eq(#spec.labels, 114, "goto: dialog carries the 114 surah labels")
+    eq(spec.counts, counts, "goto: ayah clamp table = the Hafs counts (D8)")
+    eq(spec.surah, 1, "goto: bookless prefill surah = 1")
+    eq(spec.ayah, 1, "goto: bookless prefill ayah = 1")
+    eq(q._goto_dialog, spec, "goto: dialog ref stashed for stray teardown")
+    opened = nil
+    spec.callback(18, 86)
+    eq(opened, "18:86", "goto: the Go callback routes the jump")
+    spec.close_callback()
+    eq(q._goto_dialog, nil, "goto: close clears the stashed ref")
+    QA._gotoDialogClass = saved_cls
+
+    -- order + dispatcher + widget source pins
+    local order = QA._panelDefaultOrder({})
+    local ti, gi
+    for i, id in ipairs(order) do
+        if id == "this_surah" then ti = i end
+        if id == "goto_ayah" then gi = i end
+    end
+    eq(gi, ti + 1, "goto: panel order = right after This surah")
+    local asrc = io.open(PLUGIN_DIR .. "/quran_actions.lua"):read("*a")
+    local reg_i = asrc:find('registerAction("quran_goto_ayah"', 1, true)
+    eq(reg_i ~= nil, true, "goto: dispatcher action registered")
+    eq(asrc:sub(reg_i, reg_i + 200):find("general = true", 1, true) ~= nil, true,
+        "goto: gesture is GENERAL (assignable in FM and reader)")
+    local msrc2 = io.open(PLUGIN_DIR .. "/main.lua"):read("*a")
+    local h_i = msrc2:find("function Quran:onQuranGotoAyah()", 1, true)
+    eq(h_i ~= nil, true, "goto: main.lua event handler present")
+    eq(msrc2:sub(h_i, h_i + 150):find("showGotoAyah", 1, true) ~= nil, true,
+        "goto: handler routes to showGotoAyah")
+    local gsrc = io.open(PLUGIN_DIR .. "/quran_goto.lua"):read("*a")
+    eq(gsrc:find("value_table = self.labels", 1, true) ~= nil, true,
+        "goto: surah column is a value-table picker (names, not numbers)")
+    eq(gsrc:find("value_max = max", 1, true) ~= nil, true,
+        "goto: ayah column clamps to the selected surah's count")
 end
 
 -- D-R3-4: terminology unification — string-parity pin. ONE canonical
@@ -5622,12 +5953,14 @@ do
         _quick_panel_dialog = { id = "qp" },
         _tafsir_picker = { id = "tp" },
         _ayah_card = { id = "ac" },
+        _goto_dialog = { id = "gd" },
     }, { __index = CS })
     inst:_closeStrayDialogs()
-    eq(#closed, 3, "teardown: all three live dialogs closed")
+    eq(#closed, 4, "teardown: all four live dialogs closed")
     eq(inst._quick_panel_dialog, nil, "teardown: quick panel ref cleared")
     eq(inst._tafsir_picker, nil, "teardown: tafsir picker ref cleared")
     eq(inst._ayah_card, nil, "teardown: ayah card ref cleared")
+    eq(inst._goto_dialog, nil, "teardown: goto navigator ref cleared")
 
     -- idempotent + tolerant of nothing open (double close, no dialogs)
     local nclosed = #closed

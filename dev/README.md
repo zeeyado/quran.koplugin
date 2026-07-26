@@ -56,8 +56,9 @@ KO_HOME=$KOHOME KO_MECHTEST=1 KO_MECHTEST_MODE=panel \
   /Applications/KOReader.app/Contents/MacOS/koreader /ABSOLUTE/path/to/book.epub
 ```
 
-Modes: `panel · card · browser · themes · themeflow · uap · phrases ·
-similar · surahhub`. Gotchas: the book path must be **absolute** (a
+Modes: `panel · goto · card · browser · themes · themeflow · uap ·
+phrases · similar · surahhub`. Gotchas: the book path must be
+**absolute** (a
 relative path silently opens the file manager); the first run of a fresh
 KO_HOME shows a one-time color-rendering popup: run twice and use the
 second shot.

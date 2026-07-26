@@ -64,6 +64,12 @@ function M.registerDispatcherActions()
         -- action ids/events keep the browser name.
         title = _("Quran: explorer"), general = true,
     })
+    -- GENERAL like the browser: the navigator opens the preferred book
+    -- through the seam, so it is assignable in the file manager too.
+    Dispatcher:registerAction("quran_goto_ayah", {
+        category = "none", event = "QuranGotoAyah",
+        title = _("Quran: go to ayah"), general = true,
+    })
     logger.dbg("quran.koplugin: dispatcher actions registered")
 end
 
@@ -414,6 +420,73 @@ local function notifyWarn(text)
 end
 
 -- ---------------------------------------------------------------------
+-- D-R4-10: quick surah/ayah navigator (owner shape call 2026-07-26 —
+-- two picker columns, surah left / ayah right). Bookless-capable: the
+-- go-to routes through the openBookAt seam like the browser's gotoAyah.
+-- ---------------------------------------------------------------------
+
+--- Surah labels for the navigator's left column, following the bars'
+-- surah-name script resolution (surah_display; "auto" follows the juz
+-- format's script exactly as _buildDisplayString does).
+function M.gotoSurahLabels(quran)
+    local fmt = quran.settings
+        and quran.settings:readSetting("surah_display") or "auto"
+    local jd = quran.settings and quran.settings:readSetting("juz_display")
+    local arabic = fmt == "arabic" or fmt == "arabic_with_surat"
+        or (fmt == "auto"
+            and (jd == "number_arabic" or jd == "name_arabic"))
+    local labels = {}
+    for s = 1, 114 do
+        local name = arabic and quran:surahNameArabic(s) or quran:surahName(s)
+        labels[s] = s .. " · " .. (name or "")
+    end
+    return labels
+end
+
+--- The jump itself: in a Quran book = the pending-jump consumer's page
+-- resolution (riwayah-converting, Hafs in); anywhere else = the
+-- preferred-book seam (opens the book, then jumps).
+function M.gotoAyahGo(quran, surah, ayah)
+    if quran._is_quran_book and quran._gotoAyahInBook then
+        quran:_gotoAyahInBook(surah, ayah)
+    elseif quran.openBookAt then
+        quran:openBookAt(surah, ayah)
+    end
+end
+
+-- Overridable for the harness: the real widget (quran_goto.lua) only
+-- constructs under the full KOReader stack (_panelDialogClass precedent).
+function M._gotoDialogClass(quran)
+    local ok, cls = pcall(dofile, (quran.path or "") .. "/quran_goto.lua")
+    if ok and cls then return cls end
+end
+
+function M.showGotoAyah(quran)
+    local counts = quran._hafsCounts and quran:_hafsCounts()
+    if not counts then return end
+    local s, a
+    if quran._is_quran_book then
+        -- Prefill = the first visible ayah (book axis; ≈Hafs — a Warsh
+        -- divergent surah prefills the book number, the go-to itself
+        -- stays Hafs-correct).
+        s, a = currentPosition(quran)
+    end
+    local Dlg = M._gotoDialogClass(quran)
+    if not Dlg then return end
+    local dialog = Dlg:new{
+        title_text = _("Go to ayah"),
+        labels = M.gotoSurahLabels(quran),
+        counts = counts,
+        surah = s or 1,
+        ayah = a or 1,
+        callback = function(surah, ayah) M.gotoAyahGo(quran, surah, ayah) end,
+        close_callback = function() quran._goto_dialog = nil end,
+    }
+    quran._goto_dialog = dialog
+    UIManager:show(dialog)
+end
+
+-- ---------------------------------------------------------------------
 -- Installed-resource detection (the "app-like" layer: the panel offers
 -- exactly what the user has installed, each opening directly)
 -- ---------------------------------------------------------------------
@@ -698,8 +771,9 @@ end
 -- item's available(ctx) decides where it actually renders. Mark layers are
 -- spliced in from the marks module so the order can't drift from LAYERS.
 local PANEL_ORDER_HEAD = {
-    "open_book", "this_surah", "surah_overview", "search", "browser",
-    "library_assets", "header_bar", "juz_footer", "minimal_popups",
+    "open_book", "this_surah", "goto_ayah", "surah_overview", "search",
+    "browser", "library_assets", "header_bar", "juz_footer",
+    "minimal_popups",
 }
 local PANEL_ORDER_TAIL = { "theme_headings", "more_settings" }
 
@@ -809,6 +883,17 @@ function M._panelRegistry(quran)
 
     -- Row text "Read surah overview" (owner 2026-07-25, rides F31): the
     -- panel row is an action; the settings-list label stays the noun.
+    -- D-R4-10 (owner 2026-07-26): the quick navigator, one tap from the
+    -- panel; bookless routes through the open-book seam.
+    reg.goto_ayah = { label = _("Go to ayah"), available = always,
+        build = function(q, _ctx, H)
+            return { text = _("Go to ayah"),
+                callback = H.close_then(function() M.showGotoAyah(q) end),
+                hold_callback = function()
+                    H.notifyWarn(_("Pick a surah and ayah and jump there. Opens your Quran book first if needed."))
+                end }
+        end }
+
     reg.surah_overview = { label = _("Surah overview"), available = inBook,
         build = function(q, _ctx, H)
             return { text = _("Read surah overview"),

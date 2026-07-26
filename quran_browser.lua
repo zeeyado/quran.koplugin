@@ -1106,6 +1106,68 @@ function Browser:buildLanguageItems()
     return items
 end
 
+--- ND-20 (owner 2026-07-26): the word-study LANDING page — the old hub
+-- popup as a browser screen. The word popup's three inline buttons
+-- deep-link THROUGH this page (it is pushed beneath their targets), so
+-- ← from any word-level surface lands here, one level up. Rows dim when
+-- their data package is absent (F19 idiom — visible, honest); the
+-- grammar row opens the MASAQ view OVER this page (grammar is
+-- popup-locked, the page stays beneath).
+function Browser:showWordStudy(root, word_id, surface)
+    local quran = self.quran
+    local roots = self:rootsModule()
+    local masaq = self:masaqModule()
+    local masaq_ok = (word_id and masaq
+        and (masaq._db_path or masaq.findDb(quran))) and true or false
+    local totals = root and roots and roots.totalsMap
+        and roots.totalsMap(quran)
+    local occ = totals and totals[root]
+    local items = {}
+    table.insert(items, {
+        text = _("Root explorer"),
+        dim = not (root and roots) or nil,
+        callback = function()
+            if not (root and roots and roots.showRoot) then
+                notifyWarn(_("No root recorded for this word."))
+                return
+            end
+            roots.showRoot(self, root,
+                word_id and { word_id = word_id } or nil)
+        end,
+    })
+    table.insert(items, {
+        text = _("Occurrences"),
+        mandatory = occ and ("\195\151" .. occ.words) or nil,   -- ×N
+        dim = not occ or nil,
+        callback = function()
+            if not (occ and roots and roots.showOccurrences) then
+                notifyWarn(_("Occurrence counts need the root explorer data (Library & assets)."))
+                return
+            end
+            roots.showOccurrences(self, root)
+        end,
+    })
+    table.insert(items, {
+        text = _("Word grammar (MASAQ)"),
+        dim = not masaq_ok or nil,
+        callback = function()
+            if not masaq_ok then
+                notifyWarn(_("Word grammar needs the quran_masaq data package (Library & assets)."))
+                return
+            end
+            -- Bare-arrow close (D-R3-8): this page sits right beneath.
+            quran:openMasaqWord(word_id, self:backLabel())
+        end,
+    })
+    local title_bits = {}
+    if surface and surface ~= "" then table.insert(title_bits, surface) end
+    if root and roots and roots.dashRoot then
+        table.insert(title_bits, roots.dashRoot(root))
+    end
+    self:navigateForward(#title_bits > 0
+        and table.concat(title_bits, " \194\183 ") or _("Word study"), items)
+end
+
 --- "Themes & connections" group (R4 typed groups): the content-
 -- discovery layers — counts + dim-to-toast exactly as on the old root
 -- (F19/F20).
