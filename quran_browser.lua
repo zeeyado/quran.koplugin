@@ -1327,6 +1327,136 @@ function Browser:buildReadingItems()
 end
 
 -- ---------------------------------------------------------------------
+-- ND-25 P3: the Dictionaries index — every installed dictionary in one
+-- place, grouped by SHELF (the round-16 taxonomy), each row opening a
+-- small per-dict page: About (entries, description when the .ifo has
+-- one) + the browse door. Lives under Library & assets; the install
+-- side (downloads) stays in Content & features.
+-- ---------------------------------------------------------------------
+
+local DICT_KIND_LABELS = {
+    word = _("Word dictionary"),
+    grammar = _("Grammar"),
+    irab = _("I'rab"),
+    asbab = _("Asbab al-Nuzul"),
+    tafsir = _("Tafsir"),
+    overview = _("Surah overview"),
+}
+
+--- Per-dict page: About rows + the browse door.
+function Browser:showDictPage(name, kind)
+    local quran = self.quran
+    local items = {}
+    local info = quran._dictIfoInfo and quran:_dictIfoInfo(name) or {}
+    table.insert(items, {
+        text = _("Kind") .. ": " .. (DICT_KIND_LABELS[kind] or kind or "?"),
+        select_enabled = false,
+    })
+    if info.wordcount then
+        table.insert(items, {
+            text = _("Entries"),
+            mandatory = tostring(info.wordcount),
+            select_enabled = false,
+        })
+    end
+    if info.description then
+        table.insert(items, {
+            text = _("About this dictionary"),
+            callback = function()
+                local InfoMessage = require("ui/widget/infomessage")
+                UIManager:show(InfoMessage:new{ text = info.description })
+            end,
+        })
+    end
+    items[#items].separator = true
+    if kind == "word" then
+        -- word-keyed: entries surface on word taps; the study browse
+        -- homes are the root explorer / occurrences
+        local roots = self:rootsModule()
+        table.insert(items, {
+            text = _("Root explorer"),
+            callback = function()
+                if roots then roots.showRoots(self) end
+            end,
+        })
+    else
+        table.insert(items, {
+            text = _("Browse"),
+            callback = function() self:showDictBrowse(name, kind) end,
+        })
+    end
+    self:navigateForward(name, items)
+end
+
+--- The index: installed dictionaries grouped by shelf.
+function Browser:showDictIndex()
+    local quran, actions = self.quran, self.actions
+    local res = actions.detectResources(quran)
+    local items = {}
+    local function header(label, n)
+        table.insert(items, {
+            text = n and string.format("%s (%d)", label, n) or label,
+            bold = true,
+            select_enabled = false,
+        })
+    end
+    local function dictRow(name, kind)
+        table.insert(items, {
+            text = name,
+            callback = function() self:showDictPage(name, kind) end,
+        })
+    end
+    if res.word then
+        header(_("Word dictionary"))
+        dictRow(res.word, "word")
+    end
+    local n_analysis = #res.grammar_all + (res.irab and 1 or 0)
+    if n_analysis > 0 then
+        header(_("Grammar & analysis"), n_analysis)
+        for _i, name in ipairs(res.grammar_all) do
+            dictRow(name, "grammar")
+        end
+        if res.irab then dictRow(res.irab, "irab") end
+    end
+    -- the lexicon shelf ships as DATA PACKAGES (lane-v1 today; the
+    -- ND-16 additions follow sqlite-first per D1) — browse home = the
+    -- root explorer
+    local roots = self:rootsModule()
+    local okr, lconn = pcall(function()
+        return roots and roots.ensureDb
+            and (select(1, roots.ensureDb(quran))) or nil
+    end)
+    if okr and lconn then
+        header(_("Lexicons"))
+        table.insert(items, {
+            text = _("Lane's Lexicon (root explorer)"),
+            callback = function() roots.showRoots(self) end,
+        })
+    end
+    if #res.tafsir > 0 then
+        header(_("Tafsir"), #res.tafsir)
+        for _i, name in ipairs(res.tafsir) do dictRow(name, "tafsir") end
+    end
+    if res.asbab then
+        header(_("Asbab al-Nuzul"))
+        dictRow(res.asbab, "asbab")
+    end
+    if #res.overview_all > 0 then
+        header(_("Surah overviews"), #res.overview_all)
+        for _i, name in ipairs(res.overview_all) do
+            dictRow(name, "overview")
+        end
+    end
+    if #items == 0 then
+        table.insert(items, {
+            text = _("No Quran dictionaries installed (see Content & features)."),
+            select_enabled = false,
+        })
+    end
+    self:navigateForward(_("Browse dictionaries"), items)
+end
+
+-- ---------------------------------------------------------------------
 -- Entry point
 -- ---------------------------------------------------------------------
 

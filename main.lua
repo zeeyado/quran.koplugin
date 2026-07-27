@@ -3127,6 +3127,23 @@ function Quran:_dictIdxPath(bookname)
     return self._dict_idx_paths[bookname]
 end
 
+--- ND-25 P3: the .ifo metadata for one enabled dictionary — feeds the
+-- per-dict About page. Returns { wordcount = n?, description = s? }
+-- (empty table when the .ifo cannot be located or read).
+function Quran:_dictIfoInfo(bookname)
+    local idx = self:_dictIdxPath(bookname)
+    if not idx then return {} end
+    local f = io.open(idx:gsub("%.idx$", ".ifo"), "r")
+    if not f then return {} end
+    local content = f:read("*all")
+    f:close()
+    if not content then return {} end
+    return {
+        wordcount = tonumber(content:match("\nwordcount=(%d+)")),
+        description = content:match("\ndescription=(.-)\r?\n"),
+    }
+end
+
 --- Enumerate an ayah-keyed dictionary as browsable items (cached).
 -- Returns items, by_surah (see groupAyahKeys), or nil when the dict's
 -- .idx cannot be located or read.

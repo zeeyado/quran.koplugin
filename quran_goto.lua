@@ -67,6 +67,70 @@ function GotoDialog:init()
     self:update(self.surah, self.ayah)
 end
 
+-- Round 19 (queued round 15): grayed prev/next NEIGHBOR PREVIEW — the
+-- picker-wheel look. Stock builds the spinner as [▲][space][value]
+-- [space][▼]; the spaces become fixed-size DIM rows showing what ▲/▼
+-- would land on (reading order: previous above, next below). The
+-- neighbor rows sit in fixed-dimen boxes so spins never re-layout the
+-- group; structure-guarded, so a stock layout change just renders the
+-- plain picker. neighbor_text(picker, dir) -> label (dir 1 = the ▲
+-- target, -1 = the ▼ target).
+local function attachNeighbors(picker, neighbor_text)
+    local frame = picker.frame
+    local center = frame and frame[1]
+    local vg = center and center[1]
+    if not (vg and #vg == 5 and picker.text_value) then return end
+    local face = Font:getFace("cfont", 17)
+    local function mk()
+        return TextWidget:new{
+            text = " ",
+            face = face,
+            fgcolor = Blitbuffer.COLOR_DARK_GRAY,
+            max_width = picker.width,
+        }
+    end
+    local up_txt, down_txt = mk(), mk()
+    local function refresh()
+        up_txt:setText(neighbor_text(picker, 1) or " ")
+        down_txt:setText(neighbor_text(picker, -1) or " ")
+    end
+    refresh()
+    local function boxed(w)
+        return CenterContainer:new{
+            dimen = Geom:new{ w = picker.width, h = w:getSize().h },
+            w,
+        }
+    end
+    local group = VerticalGroup:new{
+        align = "center",
+        vg[1], boxed(up_txt), vg[3], boxed(down_txt), vg[5],
+    }
+    picker.frame = FrameContainer:new{
+        bordersize = 0,
+        padding = Size.padding.default,
+        CenterContainer:new{
+            align = "center",
+            dimen = Geom:new{
+                w = group:getSize().w,
+                h = group:getSize().h,
+            },
+            group,
+        },
+    }
+    picker.dimen = picker.frame:getSize()
+    picker[1] = picker.frame
+    -- ayah spins update in place (no dialog rebuild): refresh the
+    -- neighbors alongside the stock center update
+    local orig_update = picker.update
+    picker.update = function(p, ...)
+        orig_update(p, ...)
+        refresh()
+        UIManager:setDirty(p.show_parent, function()
+            return "ui", p.dimen
+        end)
+    end
+end
+
 function GotoDialog:update(surah, ayah)
     local prev_movable_offset = self.movable and self.movable:getMovedOffset()
     local max = self.counts[surah] or 1
@@ -86,6 +150,12 @@ function GotoDialog:update(surah, ayah)
         value_step = -1,
         value_hold_step = -10,
     }
+    local labels = self.labels
+    attachNeighbors(self.surah_widget, function(p, dir)
+        local t = (p.value_index or 1) + dir * (p.value_step or 1)
+        if t < 1 then t = 114 elseif t > 114 then t = 1 end
+        return labels[t]
+    end)
     self:mergeLayoutInHorizontal(self.surah_widget)
     self.ayah_widget = NumberPickerWidget:new{
         show_parent = self,
@@ -97,6 +167,12 @@ function GotoDialog:update(surah, ayah)
         value_step = -1,
         value_hold_step = -10,
     }
+    attachNeighbors(self.ayah_widget, function(p, dir)
+        local t = (p.value or 1) + dir * (p.value_step or 1)
+        local hi = p.value_max or 1
+        if t < 1 then t = hi elseif t > hi then t = 1 end
+        return tostring(t)
+    end)
     self:mergeLayoutInHorizontal(self.ayah_widget)
     -- Surah change RESETS the ayah column to 1 (owner 2026-07-27: a
     -- new surah starts at its first ayah) and re-clamps its max:

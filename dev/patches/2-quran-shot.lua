@@ -43,6 +43,9 @@ UIManager:scheduleIn(12, function()
         local ui = require("apps/reader/readerui").instance
         local q = ui and ui.quran
         if q then q:openAyahPopup(2, 255) end
+    elseif mode == "dictindex" then
+        -- ND-25 P3: the Dictionaries index
+        withBrowser(function(b) b:showDictIndex() end)
     else  -- card
         local ui = require("apps/reader/readerui").instance
         local q = ui and ui.quran

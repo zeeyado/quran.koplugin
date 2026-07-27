@@ -1210,12 +1210,15 @@ _shown.item_table[#_shown.item_table].callback()  -- Library & assets (last root
 local libmenu = _shown
 eq(libmenu.switch_log[1].title, "Library & assets", "assets: library screen opens")
 -- Q4 reframe dropped the standalone dicts row (7→6); Phase-1 My books adds
--- the inventory row at the top of the library root (6→7).
-eq(libmenu.switch_log[1].n, 7, "assets: library screen has 7 items (My books + asset-source switch)")
+-- the inventory row at the top of the library root (6→7); ND-25 P3 adds
+-- the reading-side Browse-dictionaries index door (7→8).
+eq(libmenu.switch_log[1].n, 8, "assets: library screen has 8 items (My books + dict index + asset-source switch)")
 eq(libmenu.item_table[1].text, "My books",
     "mybooks: the inventory row leads the library root")
 eq(libmenu.item_table[2].text, "Content & features",
     "reframe: Content & features is the second library row")
+eq(libmenu.item_table[3].text, "Browse dictionaries",
+    "p3: the dict index door follows Content & features")
 
 -- Asset-source switch: row -> dialog -> pick test -> in-place refresh.
 -- The screen is driven by the BROWSER's lazy-loaded module instance
@@ -6845,6 +6848,35 @@ do
         "rd18-pin: browser ayah-page + resource-entry opens flagged")
     eq(rsrc:find("opts.explorer = true", 1, true) ~= nil, true,
         "rd18-pin: Reader-originated routing stays full screen")
+end
+
+-- Round 19 source pins: ND-27 slice 1 (card word-grammar row) · ND-25
+-- P3 (Dictionaries index + per-dict About pages) · goto neighbor
+-- preview (picker-wheel dim rows)
+do
+    local asrc = io.open(PLUGIN_DIR .. "/quran_ayahpopup.lua"):read("*a")
+    local bsrc = io.open(PLUGIN_DIR .. "/quran_browser.lua"):read("*a")
+    local ssrc = io.open(PLUGIN_DIR .. "/quran_assets.lua"):read("*a")
+    local gsrc = io.open(PLUGIN_DIR .. "/quran_goto.lua"):read("*a")
+    local msrc = io.open(PLUGIN_DIR .. "/main.lua"):read("*a")
+    eq(asrc:find('"word_grammar"', 1, true) ~= nil, true,
+        "nd27-pin: word_grammar is a card id")
+    eq(asrc:find("build.word_grammar = function", 1, true) ~= nil, true,
+        "nd27-pin: card builds the MASAQ row")
+    eq(asrc:find('word_grammar = _("Word grammar (MASAQ)")', 1, true)
+        ~= nil, true, "nd27-pin: organizer label matches the ayah page (G2)")
+    eq(bsrc:find("function Browser:showDictIndex", 1, true) ~= nil, true,
+        "p3-pin: Dictionaries index surface")
+    eq(bsrc:find("function Browser:showDictPage", 1, true) ~= nil, true,
+        "p3-pin: per-dict page surface")
+    eq(msrc:find("function Quran:_dictIfoInfo", 1, true) ~= nil, true,
+        "p3-pin: .ifo About reader")
+    eq(ssrc:find('text = _("Browse dictionaries")', 1, true) ~= nil, true,
+        "p3-pin: Library & assets carries the index door")
+    eq(gsrc:find("local function attachNeighbors", 1, true) ~= nil, true,
+        "goto-pin: neighbor preview attach helper")
+    local _c, n_att = gsrc:gsub("attachNeighbors%(self%.", "")
+    eq(n_att, 2, "goto-pin: both pickers get the dim neighbors")
 end
 
 print("ALL HELPER TESTS PASS")

@@ -25,7 +25,7 @@ local M = {}
 
 -- Canonical card item order (ids frozen; labels in cardSpec).
 M.CARD_ORDER = {
-    "translations", "tafsir", "grammar", "irab",
+    "translations", "tafsir", "grammar", "irab", "word_grammar",
     "similar", "themes", "phrases", "topics",
     "figures", "narrative", "ayah_page",
 }
@@ -48,6 +48,7 @@ function M.cardSpec()
                 tafsir = _("Tafsir"),
                 grammar = _("Grammar"),
                 irab = _("I'rab"),
+                word_grammar = _("Word grammar (MASAQ)"),
                 similar = _("Similar ayahs"),
                 themes = _("Themes"),
                 phrases = _("Repeated phrases"),
@@ -174,6 +175,25 @@ function M.show(quran, surah, hafs)
             callback = close_then(function()
                 quran:openTafsirReader(surah, hafs,
                     { dict = res.irab, explore = true })
+            end) }
+    end
+    -- ND-27 slice 1: MASAQ's per-ayah word list as a first-class card
+    -- row (same G2 source-tagged label as the ayah page's); lands the
+    -- browser surface masaq.showAyah — package-gated like the browser
+    -- row, never a dead button (R3-F16)
+    build.word_grammar = function()
+        local masaq = quran._masaqModule and quran:_masaqModule()
+        local okm, mconn = pcall(function()
+            return masaq and masaq.ensureDb
+                and (select(1, masaq.ensureDb(quran))) or nil
+        end)
+        if not (okm and mconn) then return end
+        return { text = _("Word grammar (MASAQ)"),
+            callback = close_then(function()
+                actions.showBrowser(quran, function(browser)
+                    local m2 = browser.masaqModule and browser:masaqModule()
+                    if m2 then m2.showAyah(browser, surah, hafs) end
+                end)
             end) }
     end
     build.similar = function()

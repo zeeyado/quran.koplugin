@@ -1789,6 +1789,14 @@ local function buildLibraryItems(browser)
             callback = function() M.showData(browser) end,
         },
         {
+            -- ND-25 P3: the reading-side index (per-shelf grouping,
+            -- About + browse doors); installs stay above
+            text = _("Browse dictionaries"),
+            callback = function()
+                if browser.showDictIndex then browser:showDictIndex() end
+            end,
+        },
+        {
             text = _("Get books"),
             callback = function() M.showBooks(browser) end,
         },
