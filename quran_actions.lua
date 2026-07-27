@@ -521,13 +521,18 @@ end
 function M.detectResources(quran)
     local dict = quran.ui and quran.ui.dictionary
     local names = dict and dict.enabled_dict_names or {}
-    local res = { tafsir = {}, grammar_all = {} }
+    local res = { tafsir = {}, grammar_all = {}, overview_all = {} }
     for _, name in ipairs(names) do
         local kind = M.classifyDict(name)
         if kind == "tafsir" then
             table.insert(res.tafsir, name)
         elseif kind == "grammar" then
             table.insert(res.grammar_all, name)
+        elseif kind == "overview" then
+            -- all languages collected (the overview ring / shelf spec);
+            -- res.overview stays the single resolved name (first wins)
+            table.insert(res.overview_all, name)
+            res.overview = res.overview or name
         elseif kind then
             res[kind] = name
         end
@@ -546,6 +551,185 @@ function M.detectResources(quran)
         res.grammar = res.grammar or res.grammar_all[1]
     end
     return res
+end
+
+-- ---------------------------------------------------------------------
+-- ND-25 P1/P2: kind-partitioned result rings + per-shelf order.
+-- The popup ring is OUR kind concept, not sdcv's shared-key accident:
+-- an ayah lookup swipes within ONE resource kind (tafsir↔tafsir,
+-- grammar↔grammar); crossing kinds is an explicit button (owner
+-- sign-off 2026-07-27). Order/visibility inside a ring comes from a
+-- per-shelf organizer (the ND-19 _surf* machinery), never from
+-- KOReader's global dicts_order — stock lookups keep the global order.
+-- ---------------------------------------------------------------------
+
+-- Which kind an UNSCOPED ("auto") ayah lookup lands on when several are
+-- installed — the generic ayah-gesture popup opens the first present.
+M.KIND_RING_ORDER = { "tafsir", "grammar", "irab", "asbab", "overview" }
+
+local KIND_LABELS = {
+    tafsir = _("Tafsir"),
+    grammar = _("Grammar"),
+    irab = _("I'rab"),
+    asbab = _("Asbab al-Nuzul"),
+    overview = _("Surah overview"),
+}
+
+--- Installed booknames of one shelf, list-shaped even for the
+-- single-member kinds (irab/asbab).
+local function shelfMembers(quran, kind)
+    local res = M.detectResources(quran)
+    if kind == "tafsir" then return res.tafsir end
+    if kind == "grammar" then return res.grammar_all end
+    if kind == "overview" then return res.overview_all end
+    local one = res[kind]
+    return one and { one } or {}
+end
+
+--- Organizer spec for one dictionary shelf (the _surf* machinery).
+-- Ids/labels are the booknames themselves; the default order seeds the
+-- resolved preference first (preferred_tafsir; G3-resolved grammar), so
+-- an untouched organizer matches today's behavior exactly.
+function M.dictShelfSpec(quran, kind)
+    return {
+        prefix = "quran_dictord_" .. kind,
+        title = (KIND_LABELS[kind] or kind) .. " " .. _("dictionaries"),
+        default = function(q)
+            local names = shelfMembers(q, kind)
+            local head
+            if kind == "grammar" then
+                head = M.detectResources(q).grammar
+            elseif kind == "tafsir" then
+                head = q.settings and q.settings:readSetting("preferred_tafsir")
+            end
+            local out = {}
+            for _, n in ipairs(names) do
+                if n ~= head then out[#out + 1] = n end
+            end
+            for _, n in ipairs(names) do
+                if n == head then table.insert(out, 1, n) break end
+            end
+            return out
+        end,
+        labels = function(q)
+            local l = {}
+            for _, n in ipairs(shelfMembers(q, kind)) do l[n] = n end
+            return l
+        end,
+    }
+end
+
+--- Ordered VISIBLE booknames for a kind: the organizer's order with the
+-- hidden ones dropped. Without usable settings (bookless mocks), the
+-- spec default (installed, preferred first).
+function M.dictRingVisible(quran, kind)
+    local spec = M.dictShelfSpec(quran, kind)
+    if not (quran and quran.settings and quran.settings.nilOrTrue) then
+        return spec.default(quran)
+    end
+    local out = {}
+    for _, id in ipairs(M._surfOrder(quran, spec)) do
+        if M._surfEnabled(quran, spec, id) then out[#out + 1] = id end
+    end
+    return out
+end
+
+--- ND-25 P1: scope one showDict result ring to a single resource kind
+-- and apply the per-shelf order/visibility. results = the
+-- DictQuickLookup result array ({ dict = bookname, ... }); kind = a
+-- classifyDict kind, or "auto" (resolve to the first KIND_RING_ORDER
+-- kind present in the results); visible_for(kind) -> ordered visible
+-- bookname list (nil = no order/visibility filter). Returns the scoped
+-- array (never empty) plus the resolved kind, or nil when nothing
+-- survives — the caller keeps the FULL ring (fallback, least surprise).
+function M.scopeResults(results, kind, visible_for)
+    if not results or #results == 0 then return end
+    if kind == "auto" or not kind then
+        kind = nil
+        for _, k in ipairs(M.KIND_RING_ORDER) do
+            for _, r in ipairs(results) do
+                if M.classifyDict(r.dict) == k then kind = k break end
+            end
+            if kind then break end
+        end
+        if not kind then return end
+    end
+    local kept = {}
+    for _, r in ipairs(results) do
+        if M.classifyDict(r.dict) == kind then kept[#kept + 1] = r end
+    end
+    if #kept == 0 then return end
+    local visible = visible_for and visible_for(kind)
+    if visible then
+        local ordered = {}
+        for _, name in ipairs(visible) do
+            for _, r in ipairs(kept) do
+                if r.dict == name then ordered[#ordered + 1] = r end
+            end
+        end
+        if #ordered == 0 then return end
+        kept = ordered
+    end
+    return kept, kind
+end
+
+--- Within-kind switch picker (the Reader's kind-aware Switch): lists
+-- the kind's other visible dicts; on_pick(bookname). Returns false
+-- when there is nothing to switch to.
+function M.showShelfPicker(quran, kind, current_dict, on_pick)
+    local ButtonDialog = require("ui/widget/buttondialog")
+    local buttons = {}
+    for _, name in ipairs(M.dictRingVisible(quran, kind)) do
+        if name ~= current_dict then
+            buttons[#buttons + 1] = { {
+                text = name,
+                callback = function()
+                    UIManager:close(quran._shelf_picker)
+                    quran._shelf_picker = nil
+                    on_pick(name)
+                end,
+            } }
+        end
+    end
+    if #buttons == 0 then return false end
+    quran._shelf_picker = ButtonDialog:new{ buttons = buttons }
+    UIManager:show(quran._shelf_picker)
+    return true
+end
+
+--- The cross-kind door (ND-25 partition): lists the OTHER installed
+-- ayah-keyed kinds (overview is surah-keyed, so it stays out);
+-- on_pick(kind, bookname) gets the kind's first visible dict. Returns
+-- false (with a notice) when nothing else is installed.
+function M.showKindChooser(quran, current_kind, on_pick)
+    local ButtonDialog = require("ui/widget/buttondialog")
+    local buttons = {}
+    for _, kind in ipairs(M.KIND_RING_ORDER) do
+        if kind ~= current_kind and kind ~= "overview" then
+            local names = M.dictRingVisible(quran, kind)
+            local dict = names and names[1]
+            if dict then
+                buttons[#buttons + 1] = { {
+                    text = KIND_LABELS[kind],
+                    callback = function()
+                        UIManager:close(quran._kind_chooser)
+                        quran._kind_chooser = nil
+                        on_pick(kind, dict)
+                    end,
+                } }
+            end
+        end
+    end
+    if #buttons == 0 then
+        local Notification = require("ui/widget/notification")
+        UIManager:show(Notification:new{
+            text = _("No other ayah resources installed."),
+        })
+        return false
+    end
+    quran._kind_chooser = ButtonDialog:new{ buttons = buttons }
+    UIManager:show(quran._kind_chooser)
+    return true
 end
 
 -- ---------------------------------------------------------------------

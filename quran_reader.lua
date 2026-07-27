@@ -905,19 +905,61 @@ function M.showTafsir(quran, surah, ayah, opts)
                 end
             end
         end
-        -- F31: "Switch tafsir" names the action — this generic ayah-dict
-        -- Reader also shows grammar/asbab entries, where a bare "Switch"
-        -- read as switching THIS resource (it always opens the tafsir
-        -- picker).
-        local extra = { {
-            id = "qr_switch",
-            text = _("Switch tafsir"),
-            keep_reader = true,  -- picker shows over the Reader; the pick
-                                 -- updates it in place (cancel keeps it)
-            callback = function()
-                quran:_showTafsirPicker(surah, ayah, opts)
-            end,
-        } }
+        -- F31 + ND-25: the Switch button is KIND-AWARE now (owner
+        -- sign-off 2026-07-27: a grammar view carrying "Switch tafsir"
+        -- was a cross-kind jump masquerading as a switch). Tafsir keeps
+        -- the named "Switch tafsir" picker; grammar gets its own
+        -- within-kind switch when both grammar dicts are installed;
+        -- single-member kinds get none. Crossing kinds is the explicit
+        -- More chooser, the same partition concept as the popup ring.
+        local actions = quran._actionsModule and quran:_actionsModule()
+        local akind = actions and actions.classifyDict
+            and actions.classifyDict(dict) or "tafsir"
+        local extra = {}
+        if akind == "tafsir" then
+            table.insert(extra, {
+                id = "qr_switch",
+                text = _("Switch tafsir"),
+                keep_reader = true,  -- picker shows over the Reader; the
+                                     -- pick updates it in place (cancel
+                                     -- keeps it)
+                callback = function()
+                    quran:_showTafsirPicker(surah, ayah, opts)
+                end,
+            })
+        elseif akind == "grammar" and actions and actions.showShelfPicker
+            and #(actions.dictRingVisible(quran, akind) or {}) > 1 then
+            table.insert(extra, {
+                id = "qr_switch",
+                text = _("Switch grammar"),
+                keep_reader = true,
+                callback = function()
+                    actions.showShelfPicker(quran, akind, dict,
+                        function(dname)
+                            local o = {}
+                            for k, v in pairs(opts) do o[k] = v end
+                            o.dict = dname
+                            o.step_dir = nil
+                            M.showTafsir(quran, surah, ayah, o)
+                        end)
+                end,
+            })
+        end
+        if actions and actions.showKindChooser then
+            table.insert(extra, {
+                id = "qr_more",
+                text = _("More"),
+                keep_reader = true,  -- chooser shows over the Reader; a
+                                     -- pick hops per-dict (← returns)
+                callback = function()
+                    actions.showKindChooser(quran, akind,
+                        function(_kind, dname)
+                            quran:openTafsirReader(surah, ayah,
+                                { dict = dname, explore = opts.explore })
+                        end)
+                end,
+            })
+        end
         if opts.explore and quran.openBrowserAtAyah then
             table.insert(extra, {
                 id = "qr_explore",

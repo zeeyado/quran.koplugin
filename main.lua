@@ -1083,6 +1083,29 @@ local function applyMonkeyPatches(quran)
                 end
             end
         end
+        -- ND-25 P1 KIND PARTITION (owner sign-off 2026-07-27): our ayah
+        -- lookups scope the ring to ONE resource kind, so ◀▶ swipes
+        -- stay within tafsirs (or grammars, …); crossing kinds is the
+        -- explicit More button, never a swipe surprise. "auto" (the
+        -- generic ayah gesture) resolves to the first installed kind
+        -- in KIND_RING_ORDER. Runs OUTSIDE the _is_quran_book gate
+        -- like the positioner below (bookless direct-opens need it
+        -- too). Nothing matching the kind → FULL ring kept (the
+        -- positioner's notification covers the missing-dict case).
+        if _active_quran and results and _active_quran._dict_kind_scope then
+            local want_kind = _active_quran._dict_kind_scope
+            _active_quran._dict_kind_scope = nil
+            local actions = _active_quran._actionsModule
+                and _active_quran:_actionsModule()
+            if actions and actions.scopeResults then
+                local scoped = actions.scopeResults(results, want_kind,
+                    function(k)
+                        return actions.dictRingVisible
+                            and actions.dictRingVisible(_active_quran, k)
+                    end)
+                if scoped then results = scoped end
+            end
+        end
         -- One-shot dictionary POSITIONER (quick panel / card / browser
         -- "open in X" buttons — owner G4 decision 2026-07-18): the
         -- requested dict's results move FIRST, the rest stay in order
@@ -1208,6 +1231,7 @@ function Quran:init()
     self._frag_offset = nil      -- spine offset cache (actions.resolveAnchorPage)
     self._anchor_conv = nil      -- per-book anchor convention (actions.anchorConvention)
     self._dict_first_name = nil -- one-shot dict filter (quick panel direct-open)
+    self._dict_kind_scope = nil -- one-shot ring kind scope (ND-25 partition)
     self._status_bar_registered = false
     LanguageSupport:registerPlugin(self)
     applyMonkeyPatches(self)
@@ -2490,6 +2514,15 @@ function Quran:openAyahPopup(surah, ayah)
     logger.info("quran.koplugin: ayah popup lookup", surah, ayah)
     self._last_ayah_surah = surah
     self._last_ayah_num = ayah
+    -- ND-25: every ayah popup opens KIND-scoped (◀▶ stays within one
+    -- resource kind). A pending direct-open dict names the kind; the
+    -- generic gesture resolves "auto" at showDict time.
+    if not self._dict_kind_scope then
+        local actions = self._actionsModule and self:_actionsModule()
+        local k = self._dict_first_name and actions and actions.classifyDict
+            and actions.classifyDict(self._dict_first_name)
+        self._dict_kind_scope = k or "auto"
+    end
     DictQuickLookup._quran_next_lookup = true
     self:_stickyLookup(name .. " " .. ayah)
 end
@@ -2500,6 +2533,10 @@ function Quran:openSurahOverviewPopup(surah)
     if not name or not self.ui or not self.ui.dictionary then return end
     logger.info("quran.koplugin: overview popup lookup", surah)
     self._last_overview_surah = surah
+    -- ND-25: bare surah-name keys can match a user's stock dicts too
+    -- ("Jonah" in an English dictionary); the overview ring keeps
+    -- overviews only.
+    self._dict_kind_scope = "overview"
     DictQuickLookup._quran_next_lookup = true
     self:_stickyLookup(name)
 end
@@ -2532,6 +2569,16 @@ function Quran:_lookupAyah(surah, ayah, dict_popup)
     -- Capture current dictionary so in-place update stays in it
     dict_popup._quran_dict_name = dict_popup.dictionary
 
+    -- ND-25: in-popup nav stays in the CURRENT ring's kind (derived
+    -- from the displayed dict; the More switch sets the scope itself
+    -- before calling here). Unknown dict → unscoped full ring.
+    if not self._dict_kind_scope then
+        local actions = self._actionsModule and self:_actionsModule()
+        local k = actions and actions.classifyDict
+            and actions.classifyDict(dict_popup.dictionary)
+        if k then self._dict_kind_scope = k end
+    end
+
     -- Signal showDict to update this popup in-place
     DictQuickLookup._quran_update_popup = dict_popup
 
@@ -2560,6 +2607,9 @@ function Quran:_lookupSurah(surah, dict_popup)
 
     -- Capture current dictionary so in-place update stays in it
     dict_popup._quran_dict_name = dict_popup.dictionary
+
+    -- ND-25: overview nav keeps the overview-only ring
+    self._dict_kind_scope = self._dict_kind_scope or "overview"
 
     -- Signal showDict to update this popup in-place
     DictQuickLookup._quran_update_popup = dict_popup
@@ -3621,6 +3671,32 @@ function Quran:_setupQuranPopupButtons(dict_popup, buttons)
                 dict_popup:onClose()
                 self:openTafsirReader(s, a,
                     { dict = dict, explore = true, force_reader = true })
+            end,
+        })
+    end
+    -- ND-25: the cross-kind door — the ring holds ONE resource kind, so
+    -- reaching the others (tafsir → grammar, …) is this explicit
+    -- button, not a swipe. Switching updates the popup in place.
+    if not (self._popupButtonOn and not self:_popupButtonOn("more")) then
+        table.insert(row2, {
+            id = "quran_more",
+            text = _("More"),
+            callback = function()
+                local s = dict_popup._quran_surah
+                local a = dict_popup._quran_ayah
+                local actions = self._actionsModule and self:_actionsModule()
+                if not (s and a and actions and actions.showKindChooser) then
+                    return
+                end
+                local cur = dict_popup.results and dict_popup.dict_index
+                    and dict_popup.results[dict_popup.dict_index]
+                local cur_kind = cur and actions.classifyDict
+                    and actions.classifyDict(cur.dict)
+                actions.showKindChooser(self, cur_kind, function(kind, dname)
+                    self._dict_kind_scope = kind
+                    self._dict_first_name = dname
+                    self:_lookupAyah(s, a, dict_popup)
+                end)
             end,
         })
     end
@@ -4993,6 +5069,10 @@ function Quran:addToMainMenu(menu_items)
                                 -- Word grammar trio; ONE shared knob (key
                                 -- unchanged) shows or hides all three
                                 { key = "wordstudy", label = _("Word study buttons") },
+                                -- ND-25: the cross-kind door (the ring
+                                -- holds one resource kind; More reaches
+                                -- the others)
+                                { key = "more", label = _("More button (other resource kinds)") },
                             }
                             for _i, b in ipairs(btns) do
                                 local bk = b.key
@@ -5020,9 +5100,43 @@ function Quran:addToMainMenu(menu_items)
                 text = _("Dictionaries & translations"),
                 help_text = _("Which Quran dictionaries and translations show in popups, previews, and the Explorer, and their order."),
                 sub_item_table = {
+                    -- ND-25 P2: per-shelf order & visibility — governs
+                    -- the kind-partitioned ayah rings, pickers, and the
+                    -- More chooser (first = preferred). The flat global
+                    -- order below stays for word taps + stock lookups.
+                    {
+                        text = _("Ayah resources: order & visibility"),
+                        help_text = _("Per-kind order for the ayah popup rings and pickers: which tafsir shows first, and which dictionaries appear at all. Tap to show or hide, hold to reorder."),
+                        sub_item_table = (function()
+                            local shelves = {
+                                { kind = "tafsir", label = _("Tafsir") },
+                                { kind = "grammar", label = _("Grammar") },
+                                { kind = "overview", label = _("Surah overviews") },
+                            }
+                            local items = {}
+                            for _i, sh in ipairs(shelves) do
+                                local kind = sh.kind
+                                table.insert(items, {
+                                    text = sh.label,
+                                    enabled_func = function()
+                                        local actions = self:_actionsModule()
+                                        return actions and actions.dictShelfSpec
+                                            and #actions.dictShelfSpec(self, kind).default(self) > 0
+                                    end,
+                                    callback = function()
+                                        local actions = self:_actionsModule()
+                                        if not (actions and actions.showSurfOrganizer) then return end
+                                        actions.showSurfOrganizer(self,
+                                            actions.dictShelfSpec(self, kind))
+                                    end,
+                                })
+                            end
+                            return items
+                        end)(),
+                    },
                     {
                         text = _("Quran dictionary order"),
-                        help_text = _("Reorder the Quran dictionaries (word, grammar, tafsirs, …) without the global manage-dictionaries screen. Controls the popup's result order and which dictionary shows first."),
+                        help_text = _("Reorder the Quran dictionaries in KOReader's own global list (word taps and standard lookups follow it). Ayah popups now ring per resource kind and follow the per-kind order above instead."),
                         callback = function() self:showQuranDictOrder() end,
                     },
                     {

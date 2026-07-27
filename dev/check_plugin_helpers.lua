@@ -572,6 +572,87 @@ do
         "detect-g3: uninstalled preference falls back to combined")
 end
 
+-- ND-25 P1/P2 (round 17): kind-partitioned rings + per-shelf order
+do
+    -- overview_all: every language collected, res.overview = first
+    local ov_quran = { ui = { dictionary = { enabled_dict_names = {
+        "Quran Surah Overview (English)", "Quran Surah Overview (Urdu)",
+    } } } }
+    local ov = QA.detectResources(ov_quran)
+    eq(#ov.overview_all, 2, "nd25: overview_all collects every language")
+    eq(ov.overview, "Quran Surah Overview (English)",
+        "nd25: res.overview = first enumerated")
+
+    -- scopeResults: partition, auto resolution, shelf order, visibility
+    local ring = {
+        { dict = "Quran Grammar" },
+        { dict = "Tafsir Ibn Kathir (English)" },
+        { dict = "Quran I'rab" },
+        { dict = "Tafsir al-Muyassar (المیسر)" },
+        { dict = "Oxford English Dictionary" },
+    }
+    local kept, rk = QA.scopeResults(ring, "tafsir")
+    eq(#kept, 2, "nd25-scope: tafsir-only ring")
+    eq(kept[1].dict, "Tafsir Ibn Kathir (English)",
+        "nd25-scope: original order kept without a shelf order")
+    eq(rk, "tafsir", "nd25-scope: resolved kind echoed")
+    kept = QA.scopeResults(ring, "auto")
+    eq(#kept, 2, "nd25-scope: auto resolves to tafsir (KIND_RING_ORDER)")
+    kept = QA.scopeResults(
+        { { dict = "Quran I'rab" }, { dict = "Oxford English Dictionary" } },
+        "auto")
+    eq(#kept, 1, "nd25-scope: auto skips to the first kind present")
+    eq(kept[1].dict, "Quran I'rab", "nd25-scope: irab survives auto")
+    eq(QA.scopeResults(ring, "asbab"), nil,
+        "nd25-scope: absent kind → nil (caller keeps the full ring)")
+    eq(QA.scopeResults({ { dict = "Oxford English Dictionary" } }, "auto"),
+        nil, "nd25-scope: no quran kinds at all → nil")
+    kept = QA.scopeResults(ring, "tafsir", function(kk)
+        eq(kk, "tafsir", "nd25-scope: visible_for gets the resolved kind")
+        return { "Tafsir al-Muyassar (المیسر)",
+            "Tafsir Ibn Kathir (English)" }
+    end)
+    eq(kept[1].dict, "Tafsir al-Muyassar (المیسر)",
+        "nd25-scope: shelf order re-sorts the ring")
+    kept = QA.scopeResults(ring, "tafsir", function()
+        return { "Tafsir al-Muyassar (المیسر)" }
+    end)
+    eq(#kept, 1, "nd25-scope: hidden dicts drop from the ring")
+    eq(QA.scopeResults(ring, "tafsir", function() return {} end), nil,
+        "nd25-scope: everything hidden → nil (fallback full ring)")
+
+    -- dictShelfSpec / dictRingVisible: preference seeds the head;
+    -- organizer order + visibility win over it
+    local dset = {}
+    local dq = {
+        ui = { dictionary = { enabled_dict_names = {
+            "Tafsir al-Muyassar (المیسر)", "Tafsir Ibn Kathir (English)",
+            "Quran Grammar (Lite)", "Quran Grammar",
+        } } },
+        settings = {
+            isTrue = function(_, kk) return dset[kk] == true end,
+            nilOrTrue = function(_, kk) return dset[kk] ~= false end,
+            readSetting = function(_, kk) return dset[kk] end,
+            saveSetting = function(_, kk, v) dset[kk] = v end,
+            delSetting = function(_, kk) dset[kk] = nil end,
+            flush = function() end,
+        },
+    }
+    local tspec = QA.dictShelfSpec(dq, "tafsir")
+    eq(tspec.prefix, "quran_dictord_tafsir", "nd25-shelf: settings prefix")
+    dset.preferred_tafsir = "Tafsir Ibn Kathir (English)"
+    eq(QA.dictRingVisible(dq, "tafsir")[1], "Tafsir Ibn Kathir (English)",
+        "nd25-shelf: preferred_tafsir seeds the order head")
+    eq(QA.dictRingVisible(dq, "grammar")[1], "Quran Grammar",
+        "nd25-shelf: grammar default head = G3-resolved (combined)")
+    QA._surfMove(dq, tspec, "Tafsir al-Muyassar (المیسر)", "up")
+    eq(QA.dictRingVisible(dq, "tafsir")[1], "Tafsir al-Muyassar (المیسر)",
+        "nd25-shelf: organizer reorder wins the ring order")
+    QA._surfToggle(dq, tspec, "Tafsir Ibn Kathir (English)")
+    eq(#QA.dictRingVisible(dq, "tafsir"), 1,
+        "nd25-shelf: organizer hide drops from the ring")
+end
+
 -- quran_browser: item construction + navigation (Menu/Screen stubbed)
 package.preload["ui/widget/menu"] = function()
     return {
@@ -2906,6 +2987,42 @@ do
     out = reorder(q, { { dict = "Tazkirul" } })
     eq(out[1].dict, "Tazkirul",
         "positioner-bookless: missing dict leaves results intact")
+end
+
+-- ND-25 P1: the KIND-PARTITION block extracted live — our ayah lookups
+-- scope the ring to ONE resource kind (◀▶ stays within tafsirs); an
+-- absent kind keeps the FULL ring (fallback, the positioner notifies)
+do
+    local part_chunk = "return function(_active_quran, results)\n"
+        .. extract("-- ND-25 P1 KIND PARTITION",
+                   "-- One-shot dictionary POSITIONER")
+        .. "\nreturn results\nend\n"
+    local partition = assert(loadstring(part_chunk))()
+    local ring = {
+        { dict = "Quran Grammar" },
+        { dict = "Tafsir Ibn Kathir (English)" },
+        { dict = "Quran I'rab" },
+    }
+    local q = {
+        _dict_kind_scope = "tafsir",
+        _actionsModule = function(_self) return QA end,
+        ui = { dictionary = { enabled_dict_names = {
+            "Quran Grammar", "Tafsir Ibn Kathir (English)", "Quran I'rab",
+        } } },
+    }
+    local out = partition(q, ring)
+    eq(#out, 1, "nd25-patch: ring scoped to the requested kind")
+    eq(out[1].dict, "Tafsir Ibn Kathir (English)",
+        "nd25-patch: the kind's dict kept")
+    eq(q._dict_kind_scope, nil, "nd25-patch: one-shot consumed")
+    q._dict_kind_scope = "asbab"
+    out = partition(q, ring)
+    eq(#out, 3, "nd25-patch: absent kind keeps the FULL ring (fallback)")
+    q._dict_kind_scope = "auto"
+    out = partition(q, ring)
+    eq(#out, 1, "nd25-patch: auto ring is single-kind")
+    eq(out[1].dict, "Tafsir Ibn Kathir (English)",
+        "nd25-patch: auto resolves per KIND_RING_ORDER (tafsir first)")
 end
 
 -- Quran:displayArabic (owner report 2026-07-18: browser occurrence
@@ -6664,6 +6781,37 @@ do
         "f31: QuranBrowser event id unchanged")
     eq(csrc:find('label = _("Explorer")', 1, true) ~= nil, true,
         "f31: panel Explorer launcher row")
+end
+
+-- ND-25 P1/P2 source pins (round 17): the kind scope threads every ayah
+-- entry point; the popup + Reader carry the cross-kind More door; the
+-- Reader Switch is kind-aware; Settings has the per-shelf organizer.
+do
+    local msrc = io.open(PLUGIN_DIR .. "/main.lua"):read("*a")
+    local rsrc = io.open(PLUGIN_DIR .. "/quran_reader.lua"):read("*a")
+    eq(msrc:find('self._dict_kind_scope = k or "auto"', 1, true) ~= nil,
+        true, "nd25-pin: openAyahPopup derives the kind scope (auto)")
+    eq(msrc:find('self._dict_kind_scope = "overview"', 1, true) ~= nil,
+        true, "nd25-pin: overview popup pins the overview ring")
+    eq(msrc:find(
+        'self._dict_kind_scope = self._dict_kind_scope or "overview"',
+        1, true) ~= nil, true,
+        "nd25-pin: overview nav keeps the overview ring")
+    eq(msrc:find('if k then self._dict_kind_scope = k end', 1, true)
+        ~= nil, true,
+        "nd25-pin: in-popup nav derives the kind from the displayed dict")
+    eq(msrc:find('id = "quran_more"', 1, true) ~= nil, true,
+        "nd25-pin: popup carries the More (cross-kind) button")
+    eq(msrc:find('{ key = "more", label = _("More button', 1, true) ~= nil,
+        true, "nd25-pin: More button has its popup-layer knob")
+    eq(msrc:find('text = _("Ayah resources: order & visibility")', 1, true)
+        ~= nil, true, "nd25-pin: Settings per-shelf organizer door")
+    eq(rsrc:find('text = _("Switch grammar")', 1, true) ~= nil, true,
+        "nd25-pin: Reader within-kind grammar switch")
+    eq(rsrc:find('id = "qr_more"', 1, true) ~= nil, true,
+        "nd25-pin: Reader carries the More (cross-kind) button")
+    eq(rsrc:find('actions.classifyDict(dict) or "tafsir"', 1, true) ~= nil,
+        true, "nd25-pin: Reader Switch resolves the current kind")
 end
 
 print("ALL HELPER TESTS PASS")

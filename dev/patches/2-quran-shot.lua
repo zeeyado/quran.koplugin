@@ -38,6 +38,11 @@ UIManager:scheduleIn(12, function()
         withBrowser(function(b)
             local qul = b:qulModule(); if qul then qul.showSimilar(b, 1, 1) end
         end)
+    elseif mode == "popup" then
+        -- ND-25: the kind-partitioned ayah popup (auto → tafsir ring)
+        local ui = require("apps/reader/readerui").instance
+        local q = ui and ui.quran
+        if q then q:openAyahPopup(2, 255) end
     else  -- card
         local ui = require("apps/reader/readerui").instance
         local q = ui and ui.quran
