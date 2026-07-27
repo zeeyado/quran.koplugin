@@ -55,6 +55,19 @@ UIManager:scheduleIn(12, function()
             local marker = q:_markerModule()
             if marker then marker.show(q, 2, 255) end
         end
+    elseif mode == "markertap" then
+        -- ND-26 round 23: drive the REAL patched onGotoLink with a
+        -- prefixed xpointer, like a device tap (regression: the
+        -- and-truncated wants call fed nil surah/ayah to show)
+        -- KO_MECHTEST_MARKER picks the layer; "off" must show NOTHING
+        -- (the swallow guard: stock footnote heuristic never sees it)
+        local ui = require("apps/reader/readerui").instance
+        local q = ui and ui.quran
+        if q and ui.link then
+            q.settings:saveSetting("quran_marker_tap",
+                os.getenv("KO_MECHTEST_MARKER") or "translation")
+            ui.link:onGotoLink({ xpointer = "#_doc_fragment_4_ ayah-2-255" })
+        end
     elseif mode == "getbooks" then
         -- DA-6(b): the recursive facet catalog root (needs network or
         -- a cached catalog for the row counts)

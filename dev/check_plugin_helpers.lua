@@ -677,7 +677,19 @@ do
         readSetting = function(_, kk) return mset[kk] end,
         isTrue = function(_, kk) return mset[kk] == true end,
     } }
-    eq(QM.wants(mq, "#ayah-2-255"), nil, "marker: layer OFF by default")
+    -- round 23: marks are intercepted EVEN with the layer Off — the
+    -- self-href otherwise trips KOReader's stock footnote heuristic
+    -- (marker text = a bare number) and pops the ayah block up
+    local wk, ws, wa = QM.wants(mq, "#ayah-2-255")
+    eq(wk, "mark", "marker: marks intercepted even with layer OFF")
+    eq(ws, 2, "marker: wants returns surah (guards the patch call shape)")
+    eq(wa, 255, "marker: wants returns ayah")
+    mset.quran_marker_override = true
+    eq(QM.wants(mq, "endnotes.xhtml#trans-2-255"), nil,
+        "marker: notes stay baked while layer is OFF, even with override")
+    mset.quran_marker_override = nil
+    eq(QM.show(mq, 2, 255), true,
+        "marker: show() with layer OFF swallows silently")
     mset.quran_marker_tap = "translation"
     eq((QM.wants(mq, "#ayah-2-255")), "mark",
         "marker: mode on intercepts marker anchors")
@@ -6972,6 +6984,26 @@ do
         "nd26-pin: Patch 6 wraps ReaderLink.onGotoLink")
     eq(msrc:find("marker.wants(q, link.xpointer)", 1, true) ~= nil, true,
         "nd26-pin: matching runs on the RAW xpointer")
+    -- round 23 regression: `marker and marker.wants(...)` truncated the
+    -- multi-return to ONE value (surah/ayah arrived nil on device)
+    eq(msrc:find("local kind, s, a = marker.wants(q, link.xpointer)",
+        1, true) ~= nil, true,
+        "nd26-pin: wants called plainly, never inside and/or")
+    eq(msrc:find("marker and marker.wants", 1, true), nil,
+        "nd26-pin: the and-truncated wants call is gone")
+    local qmsrc = io.open(PLUGIN_DIR .. "/quran_marker.lua"):read("*a")
+    eq(qmsrc:find('if mode == "off" then', 1, true) ~= nil, true,
+        "nd26-pin: show() swallows Off-mode marker taps")
+    -- cross-repo guard (skips when the ebook repo is absent, e.g. CI):
+    -- the EPUB anchors must keep the stock footnote heuristic disarmed
+    -- for non-plugin readers
+    local css = io.open(DATA_ROOT
+        .. "/src/quran_ebook/templates/styles/base.css.j2")
+    if css then
+        local csrc = css:read("*a") css:close()
+        eq(csrc:find("-cr-hint: noteref-ignore", 1, true) ~= nil, true,
+            "nd26-pin: EPUB CSS carries -cr-hint noteref-ignore")
+    end
     eq(msrc:find("function Quran:_markerModule", 1, true) ~= nil, true,
         "nd26-pin: lazy marker module loader")
     eq(msrc:find('"quran_marker_tap"', 1, true) ~= nil, true,

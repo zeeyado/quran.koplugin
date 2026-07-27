@@ -57,7 +57,9 @@ KO_HOME=$KOHOME KO_MECHTEST=1 KO_MECHTEST_MODE=panel \
 ```
 
 Modes: `panel · goto · card · popup · browser · themes · themeflow ·
-uap · phrases · similar · surahhub`. Gotchas: the book path must be
+uap · phrases · similar · surahhub · dictindex · getbooks · marker ·
+markertap` (markertap drives the real patched onGotoLink; layer via
+`KO_MECHTEST_MARKER`, "off" must show nothing). Gotchas: the book path must be
 **absolute** (a
 relative path silently opens the file manager); the first run of a fresh
 KO_HOME shows a one-time color-rendering popup: run twice and use the

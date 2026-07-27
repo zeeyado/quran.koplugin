@@ -13,6 +13,14 @@ with a Settings-chosen ayah-keyed layer. TAP only: long-press stays the
 dictionary machinery. Baked interactive books (ayah-noteref → endnote
 popups) keep their own popup unless the override setting is ON
 (maximal-EPUB posture: default defer, flip per session).
+
+Marker anchors are intercepted EVEN when the layer is Off (the tap is
+swallowed, nothing shown): left to KOReader, the self-href trips the
+stock footnote heuristic (the marker text is a bare number, detection
+flag 0x0400) and pops the whole ayah block up as a "footnote" —
+observed on device 2026-07-27. The EPUB CSS also carries -cr-hint:
+noteref-ignore on the anchor class for non-plugin KOReader, but old
+anchored builds only have this guard.
 GPL-3.0.
 ]]
 
@@ -25,7 +33,7 @@ local M = {}
 -- What a marker tap opens (setting quran_marker_tap; default off =
 -- stock behavior, the anchor stays a harmless self-jump).
 M.MODES = {
-    { value = "off", label = _("Off (marker taps do nothing special)") },
+    { value = "off", label = _("Off (marker taps do nothing)") },
     { value = "translation", label = _("Translation") },
     { value = "tafsir", label = _("Preferred tafsir") },
     { value = "card", label = _("Ayah card") },
@@ -64,13 +72,19 @@ function M.parseHref(href)
     if s then return "note", tonumber(s), tonumber(a) end
 end
 
---- Whether the onGotoLink patch should intercept this href, per the
--- mode + override settings. Returns kind, surah, ayah or nil.
+--- Whether the onGotoLink patch should intercept this href. Returns
+-- kind, surah, ayah or nil. Marker anchors ("mark") are ALWAYS ours on
+-- a quran book — even with the layer Off the tap must be swallowed
+-- (show() does nothing then), or the stock footnote heuristic pops the
+-- ayah block up. Baked noterefs ("note") stay the book's own popup
+-- unless the layer is on AND the override setting captures them.
 function M.wants(quran, href)
     local kind, s, a = M.parseHref(href)
     if not kind then return end
-    if M.mode(quran) == "off" then return end
-    if kind == "note" and not M.overrideBaked(quran) then return end
+    if kind == "note" then
+        if M.mode(quran) == "off" then return end
+        if not M.overrideBaked(quran) then return end
+    end
     return kind, s, a
 end
 
@@ -129,10 +143,14 @@ end
 -- BOOK numbering (the ids are baked per riwayah); converted to Hafs
 -- for every data lookup. Returns true (the tap is handled).
 function M.show(quran, surah, book_ayah)
-    local hafs = quran._warshToHafs
-        and quran:_warshToHafs(surah, book_ayah) or book_ayah
     local mode = M.mode(quran)
     logger.info("quran.koplugin: marker tap", surah, book_ayah, mode)
+    if mode == "off" then
+        return true  -- swallowed: the self-jump is pointless and the
+                      -- stock footnote heuristic must never see it
+    end
+    local hafs = quran._warshToHafs
+        and quran:_warshToHafs(surah, book_ayah) or book_ayah
     if mode == "card" then
         local ap = quran._ayahPopupModule and quran:_ayahPopupModule()
         if not (ap and ap.show and ap.show(quran, surah, hafs)) then

@@ -1215,10 +1215,15 @@ local function applyMonkeyPatches(quran)
         if q and q._is_quran_book and link and link.xpointer
             and not (self_link.ui and self_link.ui.paging) then
             local marker = q._markerModule and q:_markerModule()
-            local kind, s, a = marker and marker.wants(q, link.xpointer)
-            if kind then
-                marker.show(q, s, a)
-                return true
+            if marker then
+                -- plain call, never wrapped in and/or: such an
+                -- expression truncates multiple returns to ONE value
+                -- (surah/ayah arrived nil on device, round 23)
+                local kind, s, a = marker.wants(q, link.xpointer)
+                if kind then
+                    marker.show(q, s, a)
+                    return true
+                end
             end
         end
         return orig_onGotoLink(self_link, link, ...)
