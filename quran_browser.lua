@@ -411,6 +411,9 @@ function Browser:showAyahPage(surah, hafs_ayah, opts)
                 local opened = quran.openTafsirReader
                     and quran:openTafsirReader(surah, hafs_ayah, {
                         dict = dict_name,
+                        explorer = true,  -- round 18: Explorer opens
+                                          -- full screen (no Minimal
+                                          -- popups flip)
                         back_label = self:backLabel(),
                     })
                 if not opened then
@@ -526,12 +529,13 @@ function Browser:showAyahPage(surah, hafs_ayah, opts)
 
     -- Surah context (overview renders in-browser when the Reader path is
     -- available; the popup remains the pre-rawSdcv fallback — and the
-    -- D-R3-2 Simple-mode / per-item target when set)
+    -- explicit per-item "popup" override when set; round 18: Minimal
+    -- popups no longer flips Explorer opens)
     table.insert(items, {
         text = _("Surah overview"),
         callback = function()
             local use_reader = not (quran._openTargetFor
-                and quran:_openTargetFor("overview") == "popup")
+                and quran:_openTargetFor("overview", true) == "popup")
             local reader = quran._readerModule and quran:_readerModule()
             local opened = use_reader and reader and reader.showOverview
                 and res.overview
@@ -647,7 +651,7 @@ function Browser:buildSurahItems(surah)
                     return
                 end
                 local use_reader = not (quran._openTargetFor
-                    and quran:_openTargetFor("overview") == "popup")
+                    and quran:_openTargetFor("overview", true) == "popup")
                 local reader = quran._readerModule and quran:_readerModule()
                 local opened = use_reader and reader and reader.showOverview
                     and quran.canReaderTafsir and quran:canReaderTafsir()
@@ -956,9 +960,10 @@ end
 function Browser:openResourceEntry(dict_name, kind, it)
     local quran = self.quran
     if kind == "overview" then
-        -- D-R3-2: Simple mode / per-item target can route to the popup
+        -- D-R3-2 + round 18: only an explicit per-item "popup" override
+        -- routes to the popup here — Explorer opens are full screen
         local use_reader = not (quran._openTargetFor
-            and quran:_openTargetFor("overview") == "popup")
+            and quran:_openTargetFor("overview", true) == "popup")
         local reader = use_reader
             and quran.canReaderTafsir and quran:canReaderTafsir()
             and quran:_readerModule()
@@ -968,7 +973,8 @@ function Browser:openResourceEntry(dict_name, kind, it)
             return
         end
     elseif quran:openTafsirReader(it.surah, it.a1,
-            { dict = dict_name, back_label = self:backLabel() }) then
+            { dict = dict_name, explorer = true,
+              back_label = self:backLabel() }) then
         return
     end
     quran._dict_first_name = dict_name

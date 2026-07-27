@@ -5086,6 +5086,20 @@ tset.quran_simple_mode = true
 tset.open_target_irab = nil
 eq(tgq:_openTargetFor("irab"), "popup",
     "open-lock: irab follows Minimal popups")
+-- Round 18 (owner): Minimal popups is a BOOK default — from the
+-- Explorer/Reader (from_explorer) resources open full screen; an
+-- explicit per-item override and the grammar lock still win there
+tset.open_target_tafsir = nil
+eq(tgq:_openTargetFor("irab", true), "reader",
+    "rd18: Explorer open ignores Minimal popups")
+eq(tgq:_openTargetFor("tafsir", true), "reader",
+    "rd18: Explorer tafsir full screen under Minimal popups")
+tset.open_target_tafsir = "popup"
+eq(tgq:_openTargetFor("tafsir", true), "popup",
+    "rd18: explicit per-item popup override wins in the Explorer too")
+tset.open_target_tafsir = nil
+eq(tgq:_openTargetFor("grammar", true), "popup",
+    "rd18: grammar lock wins over the Explorer context")
 tset.quran_simple_mode = nil
 tset.open_target_grammar = "popup"
 eq(tgq:_popupButtonOn("explore"), true, "d-r3-2: popup buttons default on")
@@ -6812,6 +6826,25 @@ do
         "nd25-pin: Reader carries the More (cross-kind) button")
     eq(rsrc:find('actions.classifyDict(dict) or "tafsir"', 1, true) ~= nil,
         true, "nd25-pin: Reader Switch resolves the current kind")
+end
+
+-- Round 18 source pins: the Explorer/Reader context flag threads every
+-- full-screen-origin open (Minimal popups = book default only)
+do
+    local msrc = io.open(PLUGIN_DIR .. "/main.lua"):read("*a")
+    local bsrc = io.open(PLUGIN_DIR .. "/quran_browser.lua"):read("*a")
+    local rsrc = io.open(PLUGIN_DIR .. "/quran_reader.lua"):read("*a")
+    eq(msrc:find("_openTargetFor(kind, opts.explorer)", 1, true) ~= nil,
+        true, "rd18-pin: openTafsirReader passes the caller context")
+    eq(msrc:find("explorer = opts and opts.explorer", 1, true) ~= nil,
+        true, "rd18-pin: tafsir picker forwards the context")
+    local _, n_ov = bsrc:gsub('_openTargetFor%("overview", true%)', "")
+    eq(n_ov, 3, "rd18-pin: all 3 browser overview checks are Explorer-scoped")
+    local _, n_ex = bsrc:gsub("explorer = true", "")
+    eq(n_ex >= 2, true,
+        "rd18-pin: browser ayah-page + resource-entry opens flagged")
+    eq(rsrc:find("opts.explorer = true", 1, true) ~= nil, true,
+        "rd18-pin: Reader-originated routing stays full screen")
 end
 
 print("ALL HELPER TESTS PASS")

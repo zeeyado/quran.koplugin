@@ -3349,7 +3349,7 @@ end
 -- settings wins ("popup" / "reader"); otherwise Minimal popups (né
 -- Simple mode, key quran_simple_mode) → the dict popup, default →
 -- full screen.
-function Quran:_openTargetFor(kind)
+function Quran:_openTargetFor(kind, from_explorer)
     -- GRAMMAR stays popup-locked (MuPDF renders its tables; TextViewer
     -- mangles them) — the word dict popup-locks by nature. I'rab
     -- UNLOCKED (owner 2026-07-26 round 8: "fine for that to open in
@@ -3359,6 +3359,11 @@ function Quran:_openTargetFor(kind)
     local s = self.settings
     local override = s and s:readSetting("open_target_" .. (kind or ""))
     if override == "popup" or override == "reader" then return override end
+    -- Round 18 (owner 2026-07-27): Minimal popups is a BOOK-reading
+    -- default — from the Explorer/Reader (already full screen) a
+    -- resource opens full screen. An explicit per-item override above
+    -- still wins in both contexts.
+    if from_explorer then return "reader" end
     if s and s:isTrue("quran_simple_mode") then return "popup" end
     return "reader"
 end
@@ -3411,7 +3416,7 @@ function Quran:openTafsirReader(surah, ayah, opts)
     -- it a no-op under Minimal popups (owner repro 2026-07-18: "it
     -- literally just keeps opening in the same dict window")
     local target = not opts.force_reader
-        and self._openTargetFor and self:_openTargetFor(kind)
+        and self._openTargetFor and self:_openTargetFor(kind, opts.explorer)
         or "reader"
     if target == "popup" and self.openAyahPopup then
         -- the popup flow (the same window the pre-rawSdcv fallback
@@ -3455,6 +3460,10 @@ function Quran:_showTafsirPicker(surah, ayah, opts)
                 quran:openTafsirReader(surah, ayah, {
                     dict = name,
                     explore = opts and opts.explore,
+                    -- round 18: the caller's context rides the picker
+                    -- hop (a Reader-originated Switch stays full screen
+                    -- under Minimal popups)
+                    explorer = opts and opts.explorer,
                     -- R3-F12: keep the caller's back label through the
                     -- picker hop (it silently fell to "← Book" before)
                     back_label = opts and opts.back_label,
@@ -4972,7 +4981,7 @@ function Quran:addToMainMenu(menu_items)
                                 .. (self.settings:isTrue("quran_simple_mode")
                                     and "  ✓" or "")
                         end,
-                        help_text = _("Ayah resources open in the quick dictionary popup by default instead of full-screen reading windows. Nothing is removed: every advanced view stays reachable. Grammar always uses the popup regardless. Also toggleable in the quick panel."),
+                        help_text = _("Ayah resources opened from the book use the quick dictionary popup by default instead of full-screen reading windows. Applies to the book only: from the Explorer, resources always open full screen. Nothing is removed: every advanced view stays reachable. Grammar always uses the popup regardless. Also toggleable in the quick panel."),
                         checked_func = function()
                             return self.settings:isTrue("quran_simple_mode")
                         end,

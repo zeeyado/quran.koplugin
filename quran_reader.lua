@@ -800,7 +800,10 @@ function M.showAyah(quran, surah, ayah, opts)
             text = _("Tafsir"),
             keep_reader = true,  -- flows to the tafsir surface in place
             callback = function()
-                quran:openTafsirReader(surah, ayah, { explore = opts.explore })
+                -- explorer: already full screen — stay full screen
+                -- (round 18; Minimal popups is a book default)
+                quran:openTafsirReader(surah, ayah,
+                    { explore = opts.explore, explorer = true })
             end,
         })
     end
@@ -855,6 +858,10 @@ end
 -- Runs its fetch inside Trapper (rawSdcv uses dismissablePopen).
 function M.showTafsir(quran, surah, ayah, opts)
     opts = opts or {}
+    -- Round 18: anything routed FROM this full-screen surface (Switch
+    -- picker, More chooser, stepping) stays full screen — Minimal
+    -- popups is a book default, not a Reader one.
+    opts.explorer = true
     local dict = opts.dict
     if not dict then return false end
     local Trapper = require("ui/trapper")
@@ -955,7 +962,8 @@ function M.showTafsir(quran, surah, ayah, opts)
                     actions.showKindChooser(quran, akind,
                         function(_kind, dname)
                             quran:openTafsirReader(surah, ayah,
-                                { dict = dname, explore = opts.explore })
+                                { dict = dname, explore = opts.explore,
+                                  explorer = true })
                         end)
                 end,
             })
