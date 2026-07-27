@@ -3172,6 +3172,14 @@ if have_db and sq3_ok then
         eq(mi[1].bold, true, "morph-entity: lead row bolded")
         eq(mi[1].text:find("عَظْمٌ", 1, true) ~= nil, true,
             "morph-entity: lead row = the tapped word's sense")
+        -- owner 2026-07-27: bold is the lead's ONLY mark — no label,
+        -- the row is formatted exactly like the other sense rows
+        eq(mi[1].text:find("This word:", 1, true), nil,
+            "morph-entity: no lead label, bold alone marks it")
+        eq(mi[1].mandatory and mi[1].mandatory:find("×", 1, true) ~= nil,
+            true, "morph-entity: lead row carries the standard ×freq")
+        eq(mi[2].bold, nil,
+            "morph-entity: summary rows stay unbolded (bold = lead only)")
         eq(mi[#mi].text, "Occurrences", "morph-entity: occurrences row present")
         eq(mi[#mi].mandatory, "×128 · 6 forms", "morph-entity: measured totals shown")
         mi[#mi].callback()
@@ -3224,9 +3232,10 @@ if have_db and sq3_ok then
         eq(mi[#mi].mandatory, "×2 · 1 forms", "morph-single: totals")
 
         -- pairing gate: a mismatched build loses ONLY the sense lead
+        -- (no bold row — bold is the lead's mark since 2026-07-27)
         QR._pair_ok = false
         QR.showRoot(mb, "عظم", { word_id = 79011003 })
-        eq(mi[1].text:find("This word:", 1, true), nil,
+        eq(mi[1].bold, nil,
             "morph-pair: mismatched builds → no sense lead")
         eq(mi[#mi].text, "Occurrences",
             "morph-pair: occurrences stay (no lane ids involved)")

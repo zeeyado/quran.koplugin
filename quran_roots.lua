@@ -785,19 +785,25 @@ function M.showRoot(browser, root, opts)
         for i, h in ipairs(hws) do
             if h.id == lead.lexicon_entry_id then idx = i break end
         end
-        local text = _("This word:") .. " " .. lead.headword
-        local gloss = idx and hws[idx].gloss
-        if gloss and gloss ~= "" then
-            text = text .. " · " .. gloss
+        -- The tapped word's own sense leads. BOLD is its only mark
+        -- (owner 2026-07-27: no "This word:" label — the row reads
+        -- like every other sense row, first position + bold carry
+        -- the "you came from here" meaning; the label overclaimed,
+        -- printing Lane's citation form as "this word").
+        local item
+        if idx then
+            item = headwordItem(browser, root, hws, idx, true)
+        else
+            -- lead entry not in the usable list (rare): bare headword
+            item = {
+                text = lead.headword,
+                callback = function()
+                    M.showEntry(browser, lead.lexicon_entry_id, root)
+                end,
+            }
         end
-        table.insert(items, {
-            text = text,
-            bold = true,
-            callback = function()
-                M.showEntry(browser, lead.lexicon_entry_id, root,
-                    idx and { list = hws, index = idx } or nil)
-            end,
-        })
+        item.bold = true
+        table.insert(items, item)
     end
     for _i, idx in ipairs(M.summaryIndexes(hws)) do
         -- the lead already shows this sense — don't repeat it
