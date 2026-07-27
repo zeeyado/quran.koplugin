@@ -1197,6 +1197,32 @@ local function applyMonkeyPatches(quran)
             return orig_buildButtonLayout(self_dql, ...)
         end
     end
+
+    -- Patch 6: ReaderLink.onGotoLink — the ND-26 marker-tap layer.
+    -- The EPUBs wrap non-noteref ayah markers in self-href anchors
+    -- (#ayah-S-A); when the marker layer is on, tapping one opens the
+    -- configurable popup instead of the pointless self-jump. Matching
+    -- runs on the RAW xpointer with a SUFFIX pattern, so the CREngine
+    -- _doc_fragment_N_ prefix never matters (we swallow the
+    -- navigation, we never resolve it). Runs BEFORE the stock footnote
+    -- popup (which lives inside onGotoLink), so the override setting
+    -- can also capture baked ayah-noteref endnote taps (…#trans-S-A /
+    -- …#tafsir-S-A); default DEFERS to the book's own popup.
+    local ReaderLink = require("apps/reader/modules/readerlink")
+    local orig_onGotoLink = ReaderLink.onGotoLink
+    ReaderLink.onGotoLink = function(self_link, link, ...)
+        local q = _active_quran
+        if q and q._is_quran_book and link and link.xpointer
+            and not (self_link.ui and self_link.ui.paging) then
+            local marker = q._markerModule and q:_markerModule()
+            local kind, s, a = marker and marker.wants(q, link.xpointer)
+            if kind then
+                marker.show(q, s, a)
+                return true
+            end
+        end
+        return orig_onGotoLink(self_link, link, ...)
+    end
 end
 
 -- ---------------------------------------------------------------------------
@@ -1430,6 +1456,18 @@ function Quran:_rootsModule()
         end
     end
     return self._roots_mod or nil
+end
+
+--- Lazy-load the ND-26 marker-tap module (href matching + the popup).
+function Quran:_markerModule()
+    if self._marker_mod == nil then
+        local ok, mod = pcall(dofile, (self.path or "") .. "/quran_marker.lua")
+        self._marker_mod = (ok and type(mod) == "table") and mod or false
+        if not self._marker_mod then
+            logger.info("quran.koplugin: quran_marker.lua unavailable:", tostring(mod))
+        end
+    end
+    return self._marker_mod or nil
 end
 
 --- Lazy-load the MASAQ module (word-by-word i'rab data package).
@@ -5119,6 +5157,59 @@ function Quran:addToMainMenu(menu_items)
                             end
                             return items
                         end)(),
+                    },
+                    -- ND-26: the marker-tap layer (marker-as-anchor;
+                    -- override = a setting, default defer — owner
+                    -- decisions 2026-07-27)
+                    {
+                        text_func = function()
+                            local marker = self:_markerModule()
+                            local short = {
+                                off = _("off"),
+                                translation = _("translation"),
+                                tafsir = _("tafsir"),
+                                card = _("ayah card"),
+                            }
+                            local v = marker and marker.mode(self) or "off"
+                            return _("Ayah marker tap") .. ": "
+                                .. (short[v] or v)
+                        end,
+                        help_text = _("The books wrap each ayah marker in a link. Choose what a tap on the marker opens: a translation, your preferred tafsir, or the ayah card. Books with their own built-in tap popups keep them unless the override below is on."),
+                        sub_item_table_func = function()
+                            local marker = self:_markerModule()
+                            local items = {}
+                            if not marker then return items end
+                            for _i, m in ipairs(marker.MODES) do
+                                local mv = m.value
+                                table.insert(items, {
+                                    text = m.label,
+                                    radio = true,
+                                    checked_func = function()
+                                        return marker.mode(self) == mv
+                                    end,
+                                    callback = function()
+                                        self.settings:saveSetting(
+                                            "quran_marker_tap", mv)
+                                        self.settings:flush()
+                                    end,
+                                })
+                            end
+                            items[#items].separator = true
+                            table.insert(items, {
+                                text = _("Override built-in tap popups"),
+                                help_text = _("Books with baked marker popups (interactive variants) normally keep their own popup. On, the marker layer above replaces it everywhere."),
+                                checked_func = function()
+                                    return marker.overrideBaked(self)
+                                end,
+                                callback = function()
+                                    self.settings:saveSetting(
+                                        "quran_marker_override",
+                                        not marker.overrideBaked(self))
+                                    self.settings:flush()
+                                end,
+                            })
+                            return items
+                        end,
                     },
                 },
             },

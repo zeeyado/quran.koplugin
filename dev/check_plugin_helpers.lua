@@ -653,6 +653,64 @@ do
         "nd25-shelf: organizer hide drops from the ring")
 end
 
+-- ND-26 marker-tap layer (round 22): raw-href SUFFIX matching (the
+-- CREngine _doc_fragment_N_ prefix never matters), the mode/override
+-- gate, and the popup HTML (quran_marker.lua)
+do
+    local QM = dofile(PLUGIN_DIR .. "/quran_marker.lua")
+    local k, s, a = QM.parseHref("#ayah-2-255")
+    eq(k, "mark", "marker: bare self-href = mark")
+    eq(s, 2, "marker: surah parsed")
+    eq(a, 255, "marker: ayah parsed")
+    k = QM.parseHref("#_doc_fragment_7_ayah-2-255")
+    eq(k, "mark", "marker: fragment-prefixed self-href still matches")
+    k, s, a = QM.parseHref("endnotes.xhtml#trans-2-255")
+    eq(k, "note", "marker: baked translation noteref = note")
+    k = QM.parseHref("#_doc_fragment_12_tafsir-114-6")
+    eq(k, "note", "marker: baked tafsir noteref (prefixed) = note")
+    eq(QM.parseHref("#page604"), nil, "marker: page anchors ignored")
+    eq(QM.parseHref("/body/DocFragment/body/ul[2]/li[5]/text()[3].16"),
+        nil, "marker: search xpointers ignored")
+    eq(QM.parseHref(nil), nil, "marker: nil href ignored")
+    local mset = {}
+    local mq = { settings = {
+        readSetting = function(_, kk) return mset[kk] end,
+        isTrue = function(_, kk) return mset[kk] == true end,
+    } }
+    eq(QM.wants(mq, "#ayah-2-255"), nil, "marker: layer OFF by default")
+    mset.quran_marker_tap = "translation"
+    eq((QM.wants(mq, "#ayah-2-255")), "mark",
+        "marker: mode on intercepts marker anchors")
+    eq(QM.wants(mq, "endnotes.xhtml#trans-2-255"), nil,
+        "marker: baked noterefs DEFER by default (owner: maximal EPUB)")
+    mset.quran_marker_override = true
+    eq((QM.wants(mq, "endnotes.xhtml#trans-2-255")), "note",
+        "marker: override setting captures baked noterefs")
+    mset.quran_marker_tap = "bogus"
+    eq(QM.mode(mq), "off", "marker: unknown mode value degrades to off")
+    mset.quran_marker_tap = "translation"
+    local tq = {
+        settings = mq.settings,
+        surahName = function(_self, _n) return "Al-Baqarah" end,
+        _textModule = function() return {
+            ensureDb = function() return {} end,
+            enabledTranslations = function() return { {
+                name = "Sahih International",
+                text = "Allah - <the> Ever-Living",
+            } } end,
+        } end,
+    }
+    local html = QM.contentHtml(tq, "translation", 2, 255)
+    eq(html:find("Al%-Baqarah 2:255") ~= nil, true,
+        "marker: popup title carries the ayah key")
+    eq(html:find("&lt;the&gt;", 1, true) ~= nil, true,
+        "marker: body html-escaped")
+    eq(html:find("Sahih International", 1, true) ~= nil, true,
+        "marker: translation source line present")
+    eq(QM.contentHtml({ settings = mq.settings }, "translation", 2, 255),
+        nil, "marker: no text package = nil (honest notification path)")
+end
+
 -- quran_browser: item construction + navigation (Menu/Screen stubbed)
 package.preload["ui/widget/menu"] = function()
     return {
@@ -6904,6 +6962,24 @@ do
     eq(ssrc:find('openFacetScope(browser, arabic, langs, { lang = true }', 1,
         true) ~= nil, true,
         "facets-pin: Arabic-only recurses with the language axis consumed")
+end
+
+-- Round 22 source pins: ND-26 plugin leg (Patch 6 marker-tap intercept,
+-- lazy module, settings rows)
+do
+    local msrc = io.open(PLUGIN_DIR .. "/main.lua"):read("*a")
+    eq(msrc:find("ReaderLink.onGotoLink = function", 1, true) ~= nil, true,
+        "nd26-pin: Patch 6 wraps ReaderLink.onGotoLink")
+    eq(msrc:find("marker.wants(q, link.xpointer)", 1, true) ~= nil, true,
+        "nd26-pin: matching runs on the RAW xpointer")
+    eq(msrc:find("function Quran:_markerModule", 1, true) ~= nil, true,
+        "nd26-pin: lazy marker module loader")
+    eq(msrc:find('"quran_marker_tap"', 1, true) ~= nil, true,
+        "nd26-pin: mode setting key")
+    eq(msrc:find('"quran_marker_override"', 1, true) ~= nil, true,
+        "nd26-pin: override setting key (default defer)")
+    eq(msrc:find('text = _("Override built-in tap popups")', 1, true)
+        ~= nil, true, "nd26-pin: override row in Settings")
 end
 
 print("ALL HELPER TESTS PASS")

@@ -46,6 +46,15 @@ UIManager:scheduleIn(12, function()
     elseif mode == "dictindex" then
         -- ND-25 P3: the Dictionaries index
         withBrowser(function(b) b:showDictIndex() end)
+    elseif mode == "marker" then
+        -- ND-26: the marker-tap popup (translation layer, 2:255)
+        local ui = require("apps/reader/readerui").instance
+        local q = ui and ui.quran
+        if q then
+            q.settings:saveSetting("quran_marker_tap", "translation")
+            local marker = q:_markerModule()
+            if marker then marker.show(q, 2, 255) end
+        end
     elseif mode == "getbooks" then
         -- DA-6(b): the recursive facet catalog root (needs network or
         -- a cached catalog for the row counts)
