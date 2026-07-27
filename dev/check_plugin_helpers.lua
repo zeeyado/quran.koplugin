@@ -6301,6 +6301,24 @@ do
         "goto: surah column is a value-table picker (names, not numbers)")
     eq(gsrc:find("value_max = max", 1, true) ~= nil, true,
         "goto: ayah column clamps to the selected surah's count")
+    -- owner 2026-07-27 round: inverted spin (▼ = next via negative
+    -- steps, BOTH columns), both wrap, surah change resets ayah to 1,
+    -- surah value tappable (number prompt via the exposed text_value)
+    local n_steps = 0
+    for _ in gsrc:gmatch("value_step = %-1") do n_steps = n_steps + 1 end
+    eq(n_steps, 2, "goto: both pickers spin inverted (▼ = next)")
+    local n_holds = 0
+    for _ in gsrc:gmatch("value_hold_step = %-10") do n_holds = n_holds + 1 end
+    eq(n_holds, 2, "goto: hold steps inverted on both pickers")
+    local n_wraps = 0
+    for _ in gsrc:gmatch("wrap = true") do n_wraps = n_wraps + 1 end
+    eq(n_wraps, 2, "goto: both columns loop past the ends")
+    eq(gsrc:find("self:update(value_index, 1)", 1, true) ~= nil, true,
+        "goto: a new surah resets the ayah column to 1")
+    eq(gsrc:find("text_value.callback", 1, true) ~= nil, true,
+        "goto: surah center value is tappable")
+    eq(gsrc:find("function GotoDialog:promptSurah()", 1, true) ~= nil, true,
+        "goto: surah tap opens the number prompt")
 end
 
 -- D-R3-4: terminology unification — string-parity pin. ONE canonical

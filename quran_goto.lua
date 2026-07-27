@@ -73,13 +73,18 @@ function GotoDialog:update(surah, ayah)
     if ayah > max then ayah = max end
     if ayah < 1 then ayah = 1 end
     self.layout = {}
+    -- Both pickers spin INVERTED from stock (owner 2026-07-27): ▼ =
+    -- next, ▲ = previous — reading order, like turning pages. Stock ▲
+    -- applies +value_step, so negative steps flip both tap and hold.
+    -- Both columns WRAP (loop past the ends).
     self.surah_widget = NumberPickerWidget:new{
         show_parent = self,
         width = math.floor(self.width * 0.42),
         value_table = self.labels,
         value_index = surah,
         wrap = true,
-        value_hold_step = 10,
+        value_step = -1,
+        value_hold_step = -10,
     }
     self:mergeLayoutInHorizontal(self.surah_widget)
     self.ayah_widget = NumberPickerWidget:new{
@@ -88,14 +93,24 @@ function GotoDialog:update(surah, ayah)
         value = ayah,
         value_min = 1,
         value_max = max,
-        wrap = false,
-        value_hold_step = 10,
+        wrap = true,
+        value_step = -1,
+        value_hold_step = -10,
     }
     self:mergeLayoutInHorizontal(self.ayah_widget)
-    -- Surah change re-clamps the ayah column: rebuild both (the
-    -- DoubleSpinWidget idiom — pickers carry min/max at :new time).
+    -- Surah change RESETS the ayah column to 1 (owner 2026-07-27: a
+    -- new surah starts at its first ayah) and re-clamps its max:
+    -- rebuild both (the DoubleSpinWidget idiom — pickers carry
+    -- min/max at :new time).
     self.surah_widget.picker_updated_callback = function(_value, value_index)
-        self:update(value_index, self.ayah_widget:getValue())
+        self:update(value_index, 1)
+    end
+    -- The surah VALUE is tappable like the ayah number (owner
+    -- 2026-07-27): stock only wires center-tap input for numeric
+    -- pickers (value_table columns get none), but the center Button
+    -- is exposed as text_value — hook it to a surah-number prompt.
+    self.surah_widget.text_value.callback = function()
+        self:promptSurah()
     end
 
     local text_max_width = math.floor(0.95 * self.width / 2)
@@ -209,6 +224,39 @@ function GotoDialog:update(surah, ayah)
     UIManager:setDirty(self, function()
         return "ui", self.widget_frame.dimen
     end)
+end
+
+--- Center-tap on the surah column: type the surah number directly
+-- (1-114, clamped); the ayah resets to 1 like any surah change.
+function GotoDialog:promptSurah()
+    local InputDialog = require("ui/widget/inputdialog")
+    local input
+    input = InputDialog:new{
+        title = _("Surah number (1-114)"),
+        input_type = "number",
+        buttons = { {
+            {
+                text = self.cancel_text,
+                id = "close",
+                callback = function() UIManager:close(input) end,
+            },
+            {
+                text = _("OK"),
+                is_enter_default = true,
+                callback = function()
+                    local n = tonumber(input:getInputText())
+                    UIManager:close(input)
+                    if n then
+                        n = math.floor(n)
+                        if n < 1 then n = 1 elseif n > 114 then n = 114 end
+                        self:update(n, 1)
+                    end
+                end,
+            },
+        } },
+    }
+    UIManager:show(input)
+    input:onShowKeyboard()
 end
 
 function GotoDialog:onCloseWidget()
