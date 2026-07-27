@@ -5566,6 +5566,36 @@ local QAP = dofile(PLUGIN_DIR .. "/quran_ayahpopup.lua")
 eq(QAP.similarQuickText, nil, "m2-rollback: quick-text body removed")
 eq(QAP.showSimilarQuick, nil, "m2-rollback: quick-view popup removed")
 
+-- ND-19: the card's surface spec rides the shared organizer machinery
+-- (quran_actions._surf*) under its own settings keys
+do
+    local cset = {}
+    local sq = { settings = {
+        isTrue = function(_, k) return cset[k] == true end,
+        nilOrTrue = function(_, k) return cset[k] ~= false end,
+        readSetting = function(_, k) return cset[k] end,
+        saveSetting = function(_, k, v) cset[k] = v end,
+        delSetting = function(_, k) cset[k] = nil end,
+        flush = function() end,
+    } }
+    local spec = QAP.cardSpec()
+    eq(spec.prefix, "quran_card", "card-surf: own settings prefix")
+    local order = QA._surfOrder(sq, spec)
+    eq(table.concat(order, ","), table.concat(QAP.CARD_ORDER, ","),
+        "card-surf: default order = CARD_ORDER")
+    eq(order[4], "irab", "card-surf: I'rab is a first-class card item")
+    QA._surfMove(sq, spec, "ayah_page", "up")
+    eq(type(cset.quran_card_order), "table",
+        "card-surf: reorder persists under quran_card_order")
+    eq(QAP.CARD_ORDER[#QAP.CARD_ORDER], "ayah_page",
+        "card-surf: the canonical order is copy-safe (move mutates a copy)")
+    QA._surfToggle(sq, spec, "themes")
+    eq(cset.quran_card_show_themes, false, "card-surf: toggle persists per item")
+    QA._surfReset(sq, spec)
+    eq(cset.quran_card_order, nil, "card-surf: reset clears the order")
+    eq(cset.quran_card_show_themes, nil, "card-surf: reset clears visibility")
+end
+
 if have_qul and sq3_ok then
     local QQc = dofile(PLUGIN_DIR .. "/quran_qul.lua")
     local cconn = QQc.openPath(qul_db)
@@ -5660,6 +5690,92 @@ if have_qul and sq3_ok then
     eq(QAP.show(cardq, 1, 1), true, "card: shows with marks layer active")
     eq(cardShape(_shown), base_shape,
         "card: marked-state shape identical to unmarked (stable card)")
+
+    -- ND-19 (owner 2026-07-25/27): the organizer-style card — titled
+    -- dialog (X close, gear → organizer), user-organized roster, and
+    -- I'rab as its own per-resource row. Drives the REAL actions
+    -- module (composed over the capture stub), so the titled path and
+    -- the shared surface machinery run end to end.
+    local cset = {}
+    local otr_log = {}
+    local act2
+    local cardq2 = {
+        surahName = function(_, s) return "Surah" .. s end,
+        _qulModule = function() return qul_stub end,
+        _actionsModule = function() return act2 end,
+        _readerModule = function()
+            return { showAyah = function() return true end }
+        end,
+        _textModule = function()
+            return { ensureDb = function() return true end }
+        end,
+        canReaderTafsir = function() return true end,
+        openTafsirReader = function(_, s, a, opts)
+            table.insert(otr_log,
+                tostring(opts and opts.dict) .. ":" .. s .. ":" .. a)
+        end,
+        openBrowserAtAyah = function() end,
+        ui = { dictionary = { enabled_dict_names = { "Quran I'rab" } } },
+        settings = {
+            isTrue = function(_, k) return cset[k] == true end,
+            nilOrTrue = function(_, k) return cset[k] ~= false end,
+            readSetting = function(_, k) return cset[k] end,
+            saveSetting = function(_, k, v) cset[k] = v end,
+            delSetting = function(_, k) cset[k] = nil end,
+            flush = function() end,
+        },
+    }
+    act2 = setmetatable({
+        showBrowser = function(_q, land)
+            land({ qulModule = function() return {
+                showSimilar = function() end, showThemesFor = function() end,
+                showMutashabihat = function() end, showTopicsFor = function() end,
+            } end })
+        end,
+    }, { __index = QA })
+    eq(QAP.show(cardq2, 2, 5), true, "card19: shows on the titled path")
+    local td = _shown
+    eq(td.title, "Surah2 2:5", "card19: titled with the ayah")
+    eq(type(td.left_icon_tap_callback), "function",
+        "card19: gear present (organizer door)")
+    eq(type(td.close_callback), "function", "card19: X close present")
+    local function findIn(d, pat)
+        for _i, r in ipairs(d.buttons) do
+            for _j, b in ipairs(r) do
+                if b.text and b.text:find(pat, 1, true) then return b end
+            end
+        end
+    end
+    eq(findIn(td, "Close"), nil, "card19: no Close cell (X replaces it)")
+    local irab_btn = findIn(td, "I'rab")
+    eq(irab_btn ~= nil, true, "card19: I'rab per-resource row (ND-19)")
+    irab_btn.callback()
+    eq(otr_log[#otr_log], "Quran I'rab:2:5",
+        "card19: I'rab routes through the reader with its own dict")
+    -- organizer setting hides a row; stored order is honored
+    cset.quran_card_show_themes = false
+    cset.quran_card_order = { "ayah_page", "translations", "irab" }
+    QAP.show(cardq2, 2, 5)
+    eq(findIn(_shown, "Themes"), nil, "card19: organizer-hidden row drops out")
+    eq(_shown.buttons[1][1].text:find("Ayah page", 1, true) ~= nil, true,
+        "card19: stored order is honored (ayah page first)")
+    cset.quran_card_show_themes = nil
+    cset.quran_card_order = nil
+    -- gear opens the card organizer (fullscreen menu, card title/items)
+    QAP.show(cardq2, 2, 5)
+    _shown.left_icon_tap_callback()
+    local org19 = _shown
+    eq(org19.title:find("Ayah card items", 1, true) ~= nil, true,
+        "card19: gear lands the card organizer")
+    local seen_irab
+    for _i, it in ipairs(org19.item_table) do
+        if it.item_id == "irab" then seen_irab = it end
+    end
+    eq(seen_irab ~= nil, true, "card19: organizer lists the I'rab item")
+    seen_irab.callback()
+    eq(cset.quran_card_show_irab, false,
+        "card19: organizer tap toggles a card item off")
+    cset.quran_card_show_irab = nil
 else
     print("skip ayah-card tests (qul build or sqlite binding unavailable)")
 end

@@ -788,11 +788,19 @@ function M._panelDefaultOrder(quran)
     return order
 end
 
+-- ---------------------------------------------------------------------
+-- Generic ordered/toggleable item-surface machinery (ND-19): the quick
+-- panel AND the ayah card share it. spec = { prefix (settings key
+-- prefix), title (organizer title), default(quran) -> id list,
+-- labels(quran) -> { [id] = label } }. Persisted state per surface:
+-- <prefix>_order (id list) + <prefix>_show_<id> (nilOrTrue).
+-- ---------------------------------------------------------------------
+
 -- Stored order reconciled with the current default: keep known ids in the
 -- stored sequence, append any new defaults, drop ids no longer defined.
-function M._panelOrder(quran)
-    local default = M._panelDefaultOrder(quran)
-    local stored = quran.settings and quran.settings:readSetting("quran_panel_order")
+function M._surfOrder(quran, spec)
+    local default = spec.default(quran)
+    local stored = quran.settings and quran.settings:readSetting(spec.prefix .. "_order")
     if type(stored) ~= "table" then return default end
     local known = {}
     for _, id in ipairs(default) do known[id] = true end
@@ -806,28 +814,68 @@ function M._panelOrder(quran)
     return order
 end
 
-function M._panelEnabled(quran, id)
-    return quran.settings:nilOrTrue("quran_panel_show_" .. id)
+function M._surfEnabled(quran, spec, id)
+    return quran.settings:nilOrTrue(spec.prefix .. "_show_" .. id)
 end
 
-function M._panelToggleEnabled(quran, id)
-    quran.settings:saveSetting("quran_panel_show_" .. id, not M._panelEnabled(quran, id))
+function M._surfToggle(quran, spec, id)
+    quran.settings:saveSetting(spec.prefix .. "_show_" .. id,
+        not M._surfEnabled(quran, spec, id))
     quran.settings:flush()
 end
 
-function M._panelMove(quran, id, dir)
-    local order = M._panelOrder(quran)
+function M._surfMove(quran, spec, id, dir)
+    local order = M._surfOrder(quran, spec)
     for i, x in ipairs(order) do
         if x == id then
             local j = (dir == "up") and (i - 1) or (i + 1)
             if j >= 1 and j <= #order then
                 order[i], order[j] = order[j], order[i]
-                quran.settings:saveSetting("quran_panel_order", order)
+                quran.settings:saveSetting(spec.prefix .. "_order", order)
                 quran.settings:flush()
             end
             return
         end
     end
+end
+
+function M._surfReset(quran, spec)
+    quran.settings:delSetting(spec.prefix .. "_order")
+    for _, id in ipairs(spec.default(quran)) do
+        quran.settings:delSetting(spec.prefix .. "_show_" .. id)
+    end
+    quran.settings:flush()
+end
+
+-- The quick panel's spec (the original surface; wrappers below keep the
+-- harness-pinned _panel* API stable).
+function M._panelSpec(quran)
+    return {
+        prefix = "quran_panel",
+        title = _("Quick panel items"),
+        default = M._panelDefaultOrder,
+        labels = function(q)
+            local labels = {}
+            for id, s in pairs(M._panelRegistry(q)) do labels[id] = s.label end
+            return labels
+        end,
+    }
+end
+
+function M._panelOrder(quran)
+    return M._surfOrder(quran, M._panelSpec(quran))
+end
+
+function M._panelEnabled(quran, id)
+    return M._surfEnabled(quran, M._panelSpec(quran), id)
+end
+
+function M._panelToggleEnabled(quran, id)
+    M._surfToggle(quran, M._panelSpec(quran), id)
+end
+
+function M._panelMove(quran, id, dir)
+    M._surfMove(quran, M._panelSpec(quran), id, dir)
 end
 
 -- Default LEFT-aligned, like koassistant's QS panel (toggle -> centered).
@@ -836,11 +884,7 @@ function M._panelLeftAlign(quran)
 end
 
 function M._panelResetItems(quran)
-    quran.settings:delSetting("quran_panel_order")
-    for _, id in ipairs(M._panelDefaultOrder(quran)) do
-        quran.settings:delSetting("quran_panel_show_" .. id)
-    end
-    quran.settings:flush()
+    M._surfReset(quran, M._panelSpec(quran))
 end
 
 -- id -> { label, available(ctx), build(quran, ctx, H) -> button-def or nil }.
@@ -1145,75 +1189,74 @@ end
 
 --- Organizer rows: dim help line + one row per item ("✓/  " + [pos] + label).
 -- Tap toggles visibility; hold reorders. Shows ALL items (both contexts), so
--- ordering is unambiguous — availability only gates the panel itself.
-function M._panelMenuItems(quran, reg, bold_id)
+-- ordering is unambiguous — availability only gates the surface itself.
+function M._surfMenuItems(quran, spec, bold_id)
+    local labels = spec.labels(quran)
     local items = { { text = _("✓ = shown   ·   Tap = toggle   ·   Hold = move   ·   \226\152\176 = reset"),
         dim = true, callback = function() end } }
     local count = 0
-    for pos, id in ipairs(M._panelOrder(quran)) do
-        local spec = reg[id]
-        local on = M._panelEnabled(quran, id)
+    for pos, id in ipairs(M._surfOrder(quran, spec)) do
+        local on = M._surfEnabled(quran, spec, id)
         if on then count = count + 1 end
         items[#items + 1] = {
-            text = (on and CHECK_PREFIX or "  ") .. "[" .. pos .. "] " .. (spec and spec.label or id),
+            text = (on and CHECK_PREFIX or "  ") .. "[" .. pos .. "] " .. (labels[id] or id),
             item_id = id, position = pos, bold = (id == bold_id),
             callback = function()
-                M._panelToggleEnabled(quran, id)
-                UIManager:nextTick(function() M._refreshPanelOrganizer(quran, reg) end)
+                M._surfToggle(quran, spec, id)
+                UIManager:nextTick(function() M._refreshSurfOrganizer(quran, spec) end)
             end,
         }
     end
     return items, count
 end
 
-function M._refreshPanelOrganizer(quran, reg, bold_id)
+function M._refreshSurfOrganizer(quran, spec, bold_id)
     local menu = quran._panel_organizer
     if not menu then return end
-    local items, count = M._panelMenuItems(quran, reg, bold_id)
-    menu:switchItemTable(_("Quick panel items") .. " (" .. count .. ")", items, -1)
+    local items, count = M._surfMenuItems(quran, spec, bold_id)
+    menu:switchItemTable(spec.title .. " (" .. count .. ")", items, -1)
 end
 
 -- Hold options: persistent ↑/↓ to reorder (koassistant's showOrderItemOptions).
-function M._showPanelOrderOptions(quran, reg, id, index)
-    local order = M._panelOrder(quran)
+function M._showSurfOrderOptions(quran, spec, id, index)
+    local order = M._surfOrder(quran, spec)
     local total = #order
     if total <= 1 then return end
     local ButtonDialog = require("ui/widget/buttondialog")
     local dlg
     local function reshow()
-        M._refreshPanelOrganizer(quran, reg, id)
-        for i, x in ipairs(M._panelOrder(quran)) do
-            if x == id then M._showPanelOrderOptions(quran, reg, id, i); break end
+        M._refreshSurfOrganizer(quran, spec, id)
+        for i, x in ipairs(M._surfOrder(quran, spec)) do
+            if x == id then M._showSurfOrderOptions(quran, spec, id, i); break end
         end
     end
     dlg = ButtonDialog:new{
         shrink_unneeded_width = true,
         buttons = { {
             { text = ARROW_UP, enabled = index > 1, callback = function()
-                M._panelMove(quran, id, "up")
+                M._surfMove(quran, spec, id, "up")
                 UIManager:close(dlg)
                 reshow()
             end },
             { text = ARROW_DOWN, enabled = index < total, callback = function()
-                M._panelMove(quran, id, "down")
+                M._surfMove(quran, spec, id, "down")
                 UIManager:close(dlg)
                 reshow()
             end },
         } },
-        tap_close_callback = function() M._refreshPanelOrganizer(quran, reg) end,
+        tap_close_callback = function() M._refreshSurfOrganizer(quran, spec) end,
     }
     UIManager:show(dlg)
 end
 
---- The fullscreen sort/enable/disable organizer for the panel items.
-function M._showPanelOrganizer(quran, on_close)
+--- The fullscreen sort/enable/disable organizer for a surface's items.
+function M.showSurfOrganizer(quran, spec, on_close)
     local Menu = require("ui/widget/menu")
     local Screen = require("device").screen
-    local reg = M._panelRegistry(quran)
-    local items, count = M._panelMenuItems(quran, reg)
+    local items, count = M._surfMenuItems(quran, spec)
     local menu
     menu = Menu:new{
-        title = _("Quick panel items") .. " (" .. count .. ")",
+        title = spec.title .. " (" .. count .. ")",
         title_bar_left_icon = "appbar.menu",
         onLeftButtonTap = function()
             local ButtonDialog = require("ui/widget/buttondialog")
@@ -1223,8 +1266,8 @@ function M._showPanelOrganizer(quran, on_close)
                 buttons = { {
                     { text = _("Reset to defaults"), align = "left", callback = function()
                         UIManager:close(reset_dialog)
-                        M._panelResetItems(quran)
-                        M._refreshPanelOrganizer(quran, reg)
+                        M._surfReset(quran, spec)
+                        M._refreshSurfOrganizer(quran, spec)
                     end },
                 } },
             }
@@ -1244,13 +1287,18 @@ function M._showPanelOrganizer(quran, on_close)
     end
     menu.onMenuHold = function(_self, item)
         if item and item.item_id then
-            M._refreshPanelOrganizer(quran, reg, item.item_id)  -- bold the held row
-            M._showPanelOrderOptions(quran, reg, item.item_id, item.position)
+            M._refreshSurfOrganizer(quran, spec, item.item_id)  -- bold the held row
+            M._showSurfOrderOptions(quran, spec, item.item_id, item.position)
         end
         return true
     end
     quran._panel_organizer = menu
     UIManager:show(menu)
+end
+
+--- The panel organizer (wrapper — the gear and harness ride this name).
+function M._showPanelOrganizer(quran, on_close)
+    M.showSurfOrganizer(quran, M._panelSpec(quran), on_close)
 end
 
 return M
