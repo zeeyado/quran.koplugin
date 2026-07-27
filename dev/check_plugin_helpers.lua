@@ -719,6 +719,28 @@ do
         "marker: body html-escaped")
     eq(html:find("Sahih International", 1, true) ~= nil, true,
         "marker: translation source line present")
+    -- round 24: label sits ABOVE its text (a trailing label hid below
+    -- the fold on long ayahs), and EVERY enabled translation renders
+    eq(html:find("Sahih International", 1, true)
+        < html:find("Ever%-Living"), true,
+        "marker: translation label precedes its text")
+    local t2 = {
+        settings = mq.settings,
+        surahName = tq.surahName,
+        _textModule = function() return {
+            ensureDb = function() return {} end,
+            enabledTranslations = function() return {
+                { name = "Sahih International", text = "First text." },
+                { name = "Maududi", text = "Second text." },
+            } end,
+        } end,
+    }
+    local html2 = QM.contentHtml(t2, "translation", 2, 255)
+    eq(html2:find("Maududi", 1, true) ~= nil, true,
+        "marker: second enabled translation renders too")
+    eq(html2:find("Second text.", 1, true)
+        > html2:find("First text.", 1, true), true,
+        "marker: translations keep roster order")
     eq(QM.contentHtml({ settings = mq.settings }, "translation", 2, 255),
         nil, "marker: no text package = nil (honest notification path)")
 end
@@ -6994,6 +7016,12 @@ do
     local qmsrc = io.open(PLUGIN_DIR .. "/quran_marker.lua"):read("*a")
     eq(qmsrc:find('if mode == "off" then', 1, true) ~= nil, true,
         "nd26-pin: show() swallows Off-mode marker taps")
+    -- round 24 regression: a nil dialog crashes ScrollHtmlWidget on
+    -- the second page and leaves hold-selection inert; ReaderUI as
+    -- dialog = stock footnote behavior (scroll + LookupWord)
+    eq(qmsrc:find("dialog = quran.ui and (quran.ui.dialog or quran.ui)",
+        1, true) ~= nil, true,
+        "nd26-pin: FootnoteWidget gets ReaderUI as its event dialog")
     -- cross-repo guard (skips when the ebook repo is absent, e.g. CI):
     -- the EPUB anchors must keep the stock footnote heuristic disarmed
     -- for non-plugin readers

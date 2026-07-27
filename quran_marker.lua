@@ -103,14 +103,23 @@ function M.contentHtml(quran, mode, surah, hafs)
     local head = string.format("<div><b>%s %d:%d</b></div>",
         esc(name), surah, hafs)
     if mode == "translation" then
+        -- ALL enabled roster translations, in roster order, each
+        -- labeled ABOVE its text (a trailing label hid below the fold
+        -- on long ayahs, and with several entries it was ambiguous)
         local qt = quran._textModule and quran:_textModule()
         local conn = qt and qt.ensureDb and qt.ensureDb(quran)
         if not conn then return end
         local ts = qt.enabledTranslations(quran, conn, surah, hafs)
-        local t = ts and ts[1]
-        if not t then return end
-        return string.format("<div>%s<div>%s</div><div><i>%s</i></div></div>",
-            head, esc(t.text), esc(t.name))
+        if not ts or #ts == 0 then return end
+        local parts = { "<div>", head }
+        for i, t in ipairs(ts) do
+            parts[#parts + 1] = string.format(
+                '<div%s><i>%s</i></div><div>%s</div>',
+                i > 1 and ' style="margin-top: 0.4em"' or "",
+                esc(t.name), esc(t.text))
+        end
+        parts[#parts + 1] = "</div>"
+        return table.concat(parts)
     elseif mode == "tafsir" then
         -- preferred tafsir → the single installed one; needs the
         -- headless fetch (pre-rawSdcv KOReader gets the notification)
@@ -178,6 +187,12 @@ function M.show(quran, surah, book_ayah)
             and Screen:scaleBySize(doc.configurable.font_size) or nil,
         doc_margins = doc and doc.getPageMargins
             and doc:getPageMargins() or nil,
+        -- ReaderUI as the event dialog, exactly like stock footnote
+        -- popups: scroll redraws target it (nil = crash on the second
+        -- page, scrollhtmlwidget.lua:182, device 2026-07-27) and
+        -- hold-release routes LookupWord/LookupWikipedia through it
+        -- (the native selection = dictionary-popup behavior)
+        dialog = quran.ui and (quran.ui.dialog or quran.ui) or nil,
         on_tap_close_callback = function() end,
     }
     quran._marker_popup = popup

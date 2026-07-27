@@ -60,13 +60,24 @@ UIManager:scheduleIn(12, function()
         -- prefixed xpointer, like a device tap (regression: the
         -- and-truncated wants call fed nil surah/ayah to show)
         -- KO_MECHTEST_MARKER picks the layer; "off" must show NOTHING
-        -- (the swallow guard: stock footnote heuristic never sees it)
+        -- (the swallow guard: stock footnote heuristic never sees it).
+        -- KO_MECHTEST_MARKER_AYAH picks the surah-2 ayah (282 = the
+        -- longest, forces a multi-page sheet). A scroll fires at +2s:
+        -- the round-24 regression (nil dialog) crashed exactly there.
         local ui = require("apps/reader/readerui").instance
         local q = ui and ui.quran
         if q and ui.link then
             q.settings:saveSetting("quran_marker_tap",
                 os.getenv("KO_MECHTEST_MARKER") or "translation")
-            ui.link:onGotoLink({ xpointer = "#_doc_fragment_4_ ayah-2-255" })
+            local aa = tonumber(os.getenv("KO_MECHTEST_MARKER_AYAH")) or 255
+            ui.link:onGotoLink({ xpointer = "#_doc_fragment_4_ ayah-2-" .. aa })
+            UIManager:scheduleIn(2, function()
+                local p = q._marker_popup
+                if p and p.htmlwidget and p.htmlwidget.onScrollText then
+                    logger.info("mechtest: scrolling footnote sheet")
+                    p.htmlwidget:onScrollText(nil, { direction = "north" })
+                end
+            end)
         end
     elseif mode == "getbooks" then
         -- DA-6(b): the recursive facet catalog root (needs network or
