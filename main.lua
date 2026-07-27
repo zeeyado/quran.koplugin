@@ -1312,13 +1312,19 @@ end
 --- Root + instance ref from a word popup, displayed result first
 -- (◀▶ may have switched dictionaries), any result as the fallback.
 -- Both come from the SAME result, so the ref matches the root's entry
--- (the D-R2-1 B2 sense-targeted landing depends on that).
+-- (the D-R2-1 B2 sense-targeted landing depends on that). The ref pick
+-- prefers the tapped ayah's instance when the position filter detected
+-- it (_last_word_ayah) — a multi-instance entry's first ref can be a
+-- different locus, which showed the WRONG word's i'rab in Word grammar
+-- and could mis-target the root landing's "This word" sense.
 function Quran:_popupWordInfo(popup)
     local roots = self:_rootsModule()
     if not roots then return end
+    local det = self._last_word_ayah
     local function parse(def)
         local root = roots.parseRootFromDefinition(def)
-        local word_id = roots.parseRefWordId(def)
+        local word_id = roots.parseRefWordIdNear(def,
+            det and det.surah, det and det.ayah)
         return root, word_id
     end
     local cur = popup.results and popup.dict_index
@@ -2704,7 +2710,9 @@ end
 -- Consumes the XPointers stashed by onWordSelection, detects the pressed
 -- word's surah:ayah, and keeps only results whose embedded
 -- <!-- ref:S:A:W --> comment matches that ayah (instance-mode word
--- dictionaries). Returns results unchanged when detection fails or nothing
+-- dictionaries). The detected ayah is also stashed (_last_word_ayah) for
+-- the word-study buttons' locus-true ref pick — single-result lookups
+-- included. Returns results unchanged when detection fails or nothing
 -- matches. Runs inside the showDict patch, before the popup is built, so it
 -- works on all KOReader versions.
 function Quran:_filterWordResultsByPosition(results)
@@ -2712,15 +2720,36 @@ function Quran:_filterWordResultsByPosition(results)
     local word_pos1 = self._stashed_word_pos1
     self._stashed_word_pos0 = nil
     self._stashed_word_pos1 = nil
+    -- Tap locus for the word-study buttons' ref pick (parseRefWordIdNear):
+    -- reset on EVERY lookup so a previous tap's ayah never leaks into the
+    -- next popup, set below only when this lookup's detection succeeds.
+    self._last_word_ayah = nil
 
-    if not (word_pos0 and word_pos1 and #results > 1) then
+    if not (word_pos0 and word_pos1) then
         return results
     end
-    logger.info("QURAN: instance match:", #results, "results")
+    -- Only instance-mode word-dict entries carry refs; skip the xpointer
+    -- detection for ordinary dictionary results.
+    local has_ref = false
+    for _, result in ipairs(results) do
+        if result.definition
+                and result.definition:find("<!-- ref:", 1, true) then
+            has_ref = true
+            break
+        end
+    end
+    if not has_ref then
+        return results
+    end
     local det_surah, det_ayah = self:_detectAyahFromXPointer(word_pos0, word_pos1)
     if not (det_surah and det_ayah) then
         return results
     end
+    self._last_word_ayah = { surah = det_surah, ayah = det_ayah }
+    if #results < 2 then
+        return results
+    end
+    logger.info("QURAN: instance match:", #results, "results")
     local ref_prefix = det_surah .. ":" .. det_ayah .. ":"
     -- Keep only results whose ref matches this ayah
     local filtered = {}
@@ -4217,6 +4246,10 @@ end
 
 function Quran:onCloseDocument()
     self:_closeStrayDialogs()
+    -- The position filter only runs with a book open — clear the tap
+    -- locus so bookless (FileManager) lookups can't ref-pick against a
+    -- stale in-book ayah.
+    self._last_word_ayah = nil
 end
 
 function Quran:onPageUpdate()
@@ -5409,7 +5442,7 @@ function Quran:addToMainMenu(menu_items)
                     },
                     {
                         text = _("Show mushaf page"),
-                        help_text = _("Shows the printed Madani-mushaf page number centered in the header (e.g. ٦٠٤), as a range like ٦٠٣/٦٠٤ when the screen straddles two mushaf pages. Only books with page markers."),
+                        help_text = _("Shows the printed mushaf page number centered in the header (e.g. ٦٠٤), as a range like ٦٠٣/٦٠٤ when the screen straddles two mushaf pages. The page grid is the book's own edition (Madani 604-page for Hafs, KFGQPC's per-riwayah layout for Warsh and others, the 610-page IndoPak layout). Only books with page markers."),
                         enabled_func = function()
                             return self.settings:isTrue("show_header_overlay")
                         end,

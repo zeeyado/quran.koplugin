@@ -55,6 +55,28 @@ function M.parseRefWordId(def)
     return tonumber(s) * 1000000 + tonumber(a) * 1000 + tonumber(w)
 end
 
+-- Locus-aware ref pick (owner 2026-07-27, "This word doesn't always
+-- match the form looked up"): multi-instance entries comma-join refs in
+-- mushaf order, so the FIRST ref can be a different locus than the
+-- tapped word — wrong per-locus i'rab in Word grammar, possibly wrong
+-- Lane sense on the root landing. When the tap's ayah is known (the
+-- position-filter detection), prefer the ref inside it; without one the
+-- first ref stays the entry's identity, exactly parseRefWordId.
+function M.parseRefWordIdNear(def, surah, ayah)
+    if not def then return end
+    local refs = def:match("<!%-%- ref:([%d:,]+)")
+    if not refs then return end
+    local first
+    for s, a, w in refs:gmatch("(%d+):(%d+):(%d+)") do
+        local id = tonumber(s) * 1000000 + tonumber(a) * 1000 + tonumber(w)
+        first = first or id
+        if surah and tonumber(s) == surah and tonumber(a) == ayah then
+            return id
+        end
+    end
+    return first
+end
+
 -- Display convention: dashes between radicals (matches the dict popup).
 function M.dashRoot(root)
     if not root or root:find("-", 1, true) then return root end

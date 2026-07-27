@@ -968,6 +968,26 @@ do
     local n_ar = 0
     for _ in asrc8:gmatch("askRestart%(") do n_ar = n_ar + 1 end
     eq(n_ar, 4, "restart: one helper + exactly 3 entry points ride it")
+    -- round 10 (owner 2026-07-27): the word-study ref pick is
+    -- locus-true. The position filter stashes the detected tap ayah
+    -- (reset every lookup, cleared on book close), and _popupWordInfo
+    -- rides parseRefWordIdNear with it — a multi-instance entry's
+    -- first ref is only the fallback, never the silent identity.
+    local main10 = io.open(PLUGIN_DIR .. "/main.lua"):read("*a")
+    local fw = main10:match(
+        "function Quran:_filterWordResultsByPosition.-\nend")
+    eq(fw ~= nil, true, "locus: position filter sliced")
+    eq(fw:find("self._last_word_ayah = nil", 1, true) ~= nil, true,
+        "locus: stash reset on every lookup")
+    eq(fw:find("self._last_word_ayah = { surah = det_surah", 1, true)
+        ~= nil, true, "locus: detection success stashes the tap ayah")
+    local pwi = main10:match("function Quran:_popupWordInfo.-\nend")
+    eq(pwi ~= nil, true, "locus: _popupWordInfo sliced")
+    eq(pwi:find("parseRefWordIdNear", 1, true) ~= nil, true,
+        "locus: ref pick rides the locus-aware parser")
+    local ocd = main10:match("function Quran:onCloseDocument.-\nend")
+    eq(ocd and ocd:find("_last_word_ayah", 1, true) ~= nil, true,
+        "locus: stash cleared on book close (bookless lookups)")
 end
 
 local merged = QAS.mergeDictState(
@@ -2620,6 +2640,19 @@ do
     eq(QR.parseRefWordId("<!-- ref:2:5:3,3:1:2 -->x"), 2005003,
         "wordstudy: multi-instance entry uses its first ref")
     eq(QR.parseRefWordId("no comment here"), nil, "wordstudy: refless def → nil")
+
+    -- locus-aware ref pick (owner 2026-07-27: "this word" must describe
+    -- the TAPPED word, not the entry's first occurrence)
+    eq(QR.parseRefWordIdNear("<!-- ref:2:5:3,3:1:2 -->x", 3, 1), 3001002,
+        "wordstudy: tapped ayah's ref preferred over the first")
+    eq(QR.parseRefWordIdNear("<!-- ref:2:5:3,3:1:2 -->x", 9, 9), 2005003,
+        "wordstudy: no ref in the tapped ayah → first ref fallback")
+    eq(QR.parseRefWordIdNear("<!-- ref:2:5:3,3:1:2 -->x", nil, nil), 2005003,
+        "wordstudy: no detected locus → identical to parseRefWordId")
+    eq(QR.parseRefWordIdNear("<!-- ref:2:5:3,2:5:7 -->x", 2, 5), 2005003,
+        "wordstudy: two refs in the tapped ayah → the earlier wins")
+    eq(QR.parseRefWordIdNear("no comment here", 1, 1), nil,
+        "wordstudy: refless def → nil (locus variant)")
     local ref_def = "<!-- ref:79:11:3 -->bones · root: \226\128\142\216\185-\216\184-\217\133</span>"
     b_gram.callback({
         results = { { definition = ref_def } },
@@ -2629,6 +2662,21 @@ do
     eq(ws_root, "عظم", "wordstudy: ref-carrying entry threads its root")
     eq(ws_wid, 79011003, "wordstudy: word_id threaded through")
     eq(ws_target, "grammar", "wordstudy: grammar button targets the MASAQ view")
+
+    -- the position filter's stashed tap ayah steers the ref pick end to
+    -- end: same multi-instance entry, locus-true word_id (2026-07-27)
+    local multi_def = "<!-- ref:2:5:3,3:1:2 -->bones · root: \226\128\142\216\185-\216\184-\217\133</span>"
+    local multi_popup = {
+        results = { { definition = multi_def } },
+        dict_index = 1,
+        onClose = function() end,
+    }
+    regq._last_word_ayah = { surah = 3, ayah = 1 }
+    b_gram.callback(multi_popup)
+    eq(ws_wid, 3001002, "wordstudy: stashed tap ayah steers the ref pick")
+    regq._last_word_ayah = nil
+    b_gram.callback(multi_popup)
+    eq(ws_wid, 2005003, "wordstudy: no stashed locus → first-ref identity")
 
     -- applyTotals (pure): measured totals decorate + re-rank the row lists
     local at_rows = {
