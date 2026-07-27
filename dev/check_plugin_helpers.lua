@@ -1155,6 +1155,14 @@ eq(QAS.entryTitle(v_urgloss, LANGS, nil),
 eq(QAS.entryTitle(v_tafsir, LANGS, "lang"),
     "Sahih International · Hafs · Uthmani · ayah-by-ayah · Al-Mukhtasar popup",
     "assets: named tafsir replaces the generic popup mention")
+-- DA-6(b) recursive facets: omit accepts a SET (every consumed axis
+-- drops from the titles as the tree narrows)
+eq(QAS.entryTitle(v_sahih, LANGS, { lang = true, layout = true }),
+    "Sahih International · Hafs · Uthmani",
+    "facets: omit-set drops every consumed axis")
+eq(QAS.entryTitle(v_sahih, LANGS, { lang = true, layout = true, script = true }),
+    "Sahih International",
+    "facets: fully narrowed title keeps the edition name")
 
 eq(QAS.variantLang(v_gloss), "en", "assets: glosses-only surfaces under its gloss language")
 local v_arabic = { id = "v6", axes = { riwayah = "warsh", orthography = "uthmani",
@@ -6877,6 +6885,25 @@ do
         "goto-pin: neighbor preview attach helper")
     local _c, n_att = gsrc:gsub("attachNeighbors%(self%.", "")
     eq(n_att, 2, "goto-pin: both pickers get the dim neighbors")
+end
+
+-- Round 20 source pins: DA-6(b) in-plugin recursive facet tree (owner
+-- 2026-07-27: maximal cross-scope + Show all per level)
+do
+    local ssrc = io.open(PLUGIN_DIR .. "/quran_assets.lua"):read("*a")
+    eq(ssrc:find("local FACET_AXES", 1, true) ~= nil, true,
+        "facets-pin: the three axes drive the tree")
+    eq(ssrc:find('text = _("Show all")', 1, true) ~= nil, true,
+        "facets-pin: every level leads with Show all")
+    eq(ssrc:find("local function openFacetScope", 1, true) ~= nil, true,
+        "facets-pin: narrowed scopes recurse (flat only when nothing left)")
+    eq(ssrc:find("openFacetScope(browser, g.variants", 1, true) ~= nil,
+        true, "facets-pin: group picks recurse with the axis consumed")
+    eq(ssrc:find("shelfFacetItem", 1, true), nil,
+        "facets-pin: the old one-level shelf rows are gone")
+    eq(ssrc:find('openFacetScope(browser, arabic, langs, { lang = true }', 1,
+        true) ~= nil, true,
+        "facets-pin: Arabic-only recurses with the language axis consumed")
 end
 
 print("ALL HELPER TESTS PASS")

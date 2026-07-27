@@ -46,6 +46,13 @@ UIManager:scheduleIn(12, function()
     elseif mode == "dictindex" then
         -- ND-25 P3: the Dictionaries index
         withBrowser(function(b) b:showDictIndex() end)
+    elseif mode == "getbooks" then
+        -- DA-6(b): the recursive facet catalog root (needs network or
+        -- a cached catalog for the row counts)
+        withBrowser(function(b)
+            local assets = b.assetsModule and b:assetsModule()
+            if assets then assets.showBooks(b) end
+        end)
     else  -- card
         local ui = require("apps/reader/readerui").instance
         local q = ui and ui.quran

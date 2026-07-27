@@ -121,12 +121,20 @@ local ORTHO_LABELS = { uthmani = "Uthmani", indopak = "IndoPak" }
 ---   <Language | "Arabic"> · <translator/tafsir> · <riwayah> · <script> · <layout>
 --- + gloss/tafsir-popup tails. Riwayah + script always show (even the Hafs ·
 --- Uthmani default). omit drops the shelf's fixed axis.
+-- omit accepts a single axis key OR a set of them (the recursive facet
+-- tree consumes several axes on the way down; every consumed axis
+-- drops out of the row titles).
+local function omitted(omit, key)
+    if type(omit) == "table" then return omit[key] end
+    return omit == key
+end
+
 function M.entryTitle(v, langs, omit)
     local a = v.axes or {}
     local layer = a.translation or a.tafsir_as_text
     local parts = {}
     -- 1. language (translation/gloss language) — or "Arabic" for bare Arabic
-    if omit ~= "lang" then
+    if not omitted(omit, "lang") then
         local code = (layer and layer.language) or a.gloss_language
         if code then
             local L = langs and langs[code]
@@ -138,14 +146,14 @@ function M.entryTitle(v, langs, omit)
     -- 2. translator / tafsir edition name
     if layer and layer.name then table.insert(parts, layer.name) end
     -- 3. riwayah + script (always present, unless the shelf fixes script)
-    if omit ~= "script" then
+    if not omitted(omit, "script") then
         if a.riwayah then table.insert(parts, (a.riwayah:gsub("^%l", string.upper))) end
         local ortho = ORTHO_LABELS[a.orthography]
         if ortho then table.insert(parts, ortho) end
     end
     -- 4. layout / type
     local glosses_only = a.gloss_language and not layer
-    if omit ~= "layout" then
+    if not omitted(omit, "layout") then
         local layout = a.layout_label or ""
         if glosses_only then layout = layout .. " · glosses only" end
         -- a named popup tafsir replaces the generic layout mention
@@ -1318,27 +1326,80 @@ local function variantItems(browser, variants, langs, omit)
     return items
 end
 
--- A facet row that opens a shelf list, each shelf opening its variants.
-local function shelfFacetItem(browser, label, groups, langs, omit)
-    return {
-        text = label,
-        mandatory = tostring(#groups),
+-- ---------------------------------------------------------------------
+-- DA-6(b) in-plugin leg (owner 2026-07-27: "maximally cross-scope
+-- categories, with a Show all at the top of each level"): the catalog
+-- is a RECURSIVE facet tree. Every level = [Show all (N)] + one
+-- "By <axis>" row per REMAINING axis (an axis with a single group at
+-- this scope is skipped); picking a group narrows the variant set and
+-- recurses with that axis consumed. Row titles inside a narrowed scope
+-- omit every consumed axis (entryTitle takes an omit SET).
+-- ---------------------------------------------------------------------
+
+local FACET_AXES = {
+    { key = "lang", label = _("By language"),
+      groups = function(vs, langs) return M.groupByLanguage(vs, langs) end },
+    { key = "layout", label = _("By layout"),
+      groups = function(vs, _l) return M.groupByShelf(vs, "layout_shelf") end },
+    { key = "script", label = _("By script"),
+      groups = function(vs, _l) return M.groupByShelf(vs, "script_shelf") end },
+}
+
+local facetLevelItems  -- mutual recursion with openFacetScope
+
+--- Open one narrowed scope: a facet level when anything is left to
+-- facet, else straight to the flat variant list (no Show-all-only
+-- screen).
+local function openFacetScope(browser, vs, langs, used, label)
+    local items = facetLevelItems(browser, vs, langs, used, label)
+    if #items == 1 then
+        browser:navigateForward(label,
+            variantItems(browser, vs, langs, used), nil, { multiline = true })
+    else
+        browser:navigateForward(label, items)
+    end
+end
+
+--- One facet level for a narrowed variant set. used = consumed-axis
+-- set (doubles as the title-omit set); label titles the Show-all push.
+facetLevelItems = function(browser, vs, langs, used, label)
+    local items = { {
+        text = _("Show all"),
+        mandatory = tostring(#vs),
         callback = function()
-            local sub = {}
-            for _i, g in ipairs(groups) do
-                table.insert(sub, {
-                    text = g.label,
-                    mandatory = tostring(#g.variants),
+            browser:navigateForward(label,
+                variantItems(browser, vs, langs, used),
+                nil, { multiline = true })
+        end,
+    } }
+    for _i, ax in ipairs(FACET_AXES) do
+        if not used[ax.key] then
+            local groups = ax.groups(vs, langs)
+            if #groups > 1 then
+                table.insert(items, {
+                    text = ax.label,
+                    mandatory = tostring(#groups),
                     callback = function()
-                        browser:navigateForward(g.label,
-                            variantItems(browser, g.variants, langs, omit),
-                            nil, { multiline = true })
+                        local sub = {}
+                        for _j, g in ipairs(groups) do
+                            table.insert(sub, {
+                                text = g.label,
+                                mandatory = tostring(#g.variants),
+                                callback = function()
+                                    local nused = { [ax.key] = true }
+                                    for k in pairs(used) do nused[k] = true end
+                                    openFacetScope(browser, g.variants,
+                                        langs, nused, g.label)
+                                end,
+                            })
+                        end
+                        browser:navigateForward(ax.label, sub)
                     end,
                 })
             end
-            browser:navigateForward(label, sub)
-        end,
-    }
+        end
+    end
+    return items
 end
 
 -- Update-in-place for the currently open book only (one sha256 — cheap
@@ -1382,8 +1443,11 @@ function M.checkThisBook(browser, catalog)
     })
 end
 
--- Books root = the same facet tree as the OPDS catalog (owner 2026-07-20:
--- full parity; the old flat riwayah·layout groups are gone).
+-- Books root = the same facet tree as the OPDS catalog (owner
+-- 2026-07-20: full parity), now RECURSIVE (owner 2026-07-27): the root
+-- is itself a facet level (Show all + the three axes), and the two
+-- filter rows (Arabic only / With tafsir) open facet levels of their
+-- own instead of flat lists.
 function M.showBooks(browser)
     ensureCatalog(function(cat)
         local langs = cat.languages or {}
@@ -1394,34 +1458,26 @@ function M.showBooks(browser)
             if not M.variantLang(v) then table.insert(arabic, v) end
             if a.tafsir or a.tafsir_as_text then table.insert(tafsir, v) end
         end
-        local items = {
-            -- (the per-open-book "check for update" moved to My books →
-            -- "Check all books for updates", a library-wide check)
-            shelfFacetItem(browser, _("By language"),
-                M.groupByLanguage(vs, langs), langs, "lang"),
-            shelfFacetItem(browser, _("By layout"),
-                M.groupByShelf(vs, "layout_shelf"), langs, "layout"),
-            shelfFacetItem(browser, _("By script"),
-                M.groupByShelf(vs, "script_shelf"), langs, "script"),
-            {
-                text = _("Arabic only"),
-                mandatory = tostring(#arabic),
-                callback = function()
-                    browser:navigateForward(_("Arabic only"),
-                        variantItems(browser, arabic, langs, nil),
-                        nil, { multiline = true })
-                end,
-            },
-            {
-                text = _("With tafsir"),
-                mandatory = tostring(#tafsir),
-                callback = function()
-                    browser:navigateForward(_("With tafsir"),
-                        variantItems(browser, tafsir, langs, nil),
-                        nil, { multiline = true })
-                end,
-            },
-        }
+        -- (the per-open-book "check for update" moved to My books →
+        -- "Check all books for updates", a library-wide check)
+        local items = facetLevelItems(browser, vs, langs, {}, _("Books"))
+        table.insert(items, {
+            text = _("Arabic only"),
+            mandatory = tostring(#arabic),
+            callback = function()
+                -- language axis is meaningless here (all bare Arabic):
+                -- consumed up front, titles drop the Arabic prefix
+                openFacetScope(browser, arabic, langs, { lang = true },
+                    _("Arabic only"))
+            end,
+        })
+        table.insert(items, {
+            text = _("With tafsir"),
+            mandatory = tostring(#tafsir),
+            callback = function()
+                openFacetScope(browser, tafsir, langs, {}, _("With tafsir"))
+            end,
+        })
         browser:navigateForward(_("Books"), items)
     end)
 end
