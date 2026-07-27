@@ -368,6 +368,26 @@ function M.wordHeadword(quran, word_id, root_arabic)
     }
 end
 
+--- The tapped word's own whole-word gloss (EQTB, per occurrence) —
+-- the honest one-liner for the entry-point lead row. Lane clauses
+-- open with apparatus or a marginal divergent sense (Lane files the
+-- shared senses under the base form and cross-references them, so
+-- بيّن's first substantive clause is the TREES sense while every
+-- Quranic use means "make clear"; owner 2026-07-27). Returns the
+-- gloss string or nil (honest miss — caller keeps the Lane gloss).
+function M.wordGloss(quran, word_id, root_arabic)
+    local conn = M.ensureMorphDb(quran)
+    if not conn then return end
+    local r = rows(conn, [[
+        SELECT o.gloss FROM occurrence o
+        JOIN root rt ON rt.root_id = o.root_id
+        WHERE o.word_id = ? AND rt.arabic = ?
+          AND o.gloss IS NOT NULL AND o.gloss != '']],
+        { word_id, root_arabic })[1]
+    if not r then return end
+    return tostring(r[1])
+end
+
 --- B2: every occurrence of a root grouped by form_key (the tag-aware
 -- grouping lemma — never lemma_eqtb, contract), groups ranked by count
 -- then first appearance, occurrences in mushaf order inside each.
@@ -801,6 +821,15 @@ function M.showRoot(browser, root, opts)
                     M.showEntry(browser, lead.lexicon_entry_id, root)
                 end,
             }
+        end
+        -- Same row shape, better gloss: the word's own Quranic gloss
+        -- replaces the Lane clause when the package has one (the
+        -- بيّن-trees fix — Lane's first clause is often apparatus or
+        -- a divergent marginal sense, never meant as a one-liner).
+        local wg = M.wordGloss(browser.quran, opts.word_id, root)
+        if wg then
+            local star = (idx and hws[idx].top3) and "★ " or ""
+            item.text = star .. (lead.headword or "?") .. " · " .. wg
         end
         item.bold = true
         table.insert(items, item)

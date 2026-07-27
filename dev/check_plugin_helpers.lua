@@ -3180,6 +3180,15 @@ if have_db and sq3_ok then
             true, "morph-entity: lead row carries the standard ×freq")
         eq(mi[2].bold, nil,
             "morph-entity: summary rows stay unbolded (bold = lead only)")
+        -- owner 2026-07-27 round 12 (the بيّن-trees case): the lead
+        -- row's gloss is the WORD's own Quranic gloss, not Lane's
+        -- first clause (apparatus / divergent marginal senses)
+        eq(QR.wordGloss(mq, 79011003, "عظم"), "bones",
+            "morph-entity: word's own EQTB gloss fetched")
+        eq(QR.wordGloss(mq, 999999999, "عظم"), nil,
+            "morph-entity: unknown word → nil gloss (honest miss)")
+        eq(mi[1].text:find("bones", 1, true) ~= nil, true,
+            "morph-entity: lead row shows the word's Quranic gloss")
         eq(mi[#mi].text, "Occurrences", "morph-entity: occurrences row present")
         eq(mi[#mi].mandatory, "×128 · 6 forms", "morph-entity: measured totals shown")
         mi[#mi].callback()
