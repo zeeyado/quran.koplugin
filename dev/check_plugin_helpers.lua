@@ -1179,6 +1179,83 @@ eq(merged[2].state, "unknown", "assets: manual install (no record) -> unknown")
 eq(merged[3].state, "absent", "assets: not installed -> absent")
 eq(merged[4].state, "current", "assets: recorded same version -> current")
 
+-- ND-28 (2026-07-27): per-translation packages — language grouping,
+-- install discovery, multi-db roster plumbing (pure + fake-fs; the
+-- sqlite-backed merge itself runs in the text-db section)
+do
+    local groups = QAS.groupTranslationsByLang({
+        { name = "text_ur_a", bookname = "B Urdu", lang_name = "Urdu" },
+        { name = "text_en_b", bookname = "B En", lang_name = "English" },
+        { name = "text_en_a", bookname = "A En", lang_name = "English" },
+    })
+    eq(#groups, 2, "nd28: grouped by language")
+    eq(groups[1].lang_name, "English", "nd28: languages alphabetical")
+    eq(#groups[1].entries, 2, "nd28: language group holds its editions")
+    eq(groups[1].entries[1].bookname, "A En",
+        "nd28: editions sorted by display name")
+    eq(groups[2].lang_name, "Urdu", "nd28: second language follows")
+    eq(#QAS.groupTranslationsByLang(nil), 0, "nd28: nil entries safe")
+
+    local saved_fs = fake_fs
+    fake_fs = {
+        ["/qdata"] = "directory",
+        ["/qdata/text-v1.sqlite"] = "file",
+        ["/qdata/text_en_sahih-v1.sqlite"] = "file",
+        ["/qdata/text_en_sahih-v2.sqlite"] = "file",
+        ["/qdata/text_ur_qul54-v1.sqlite"] = "file",
+        ["/qdata/lane-v1.sqlite"] = "file",
+    }
+    local inst = QAS.findInstalledTranslations("/qdata")
+    eq(inst.text_en_sahih, "/qdata", "nd28: installed package probed")
+    eq(inst.text_ur_qul54, "/qdata", "nd28: second package probed")
+    local n_inst = 0
+    for _ in pairs(inst) do n_inst = n_inst + 1 end
+    eq(n_inst, 2, "nd28: probe matches exactly the text_ underscore family")
+
+    local QT28 = dofile(PLUGIN_DIR .. "/quran_text.lua")
+    local paths = QT28.findTranslationDbs({ path = "/qdata" })
+    eq(#paths, 2, "nd28: discovery finds one path per package")
+    eq(paths[1], "/qdata/text_en_sahih-v2.sqlite",
+        "nd28: highest version wins per package")
+    eq(paths[2], "/qdata/text_ur_qul54-v1.sqlite", "nd28: stable path order")
+    eq(QT28.findDb({ path = "/qdata" }), "/qdata/text-v1.sqlite",
+        "nd28: base package discovery unaffected (dash vs underscore)")
+    fake_fs = saved_fs
+
+    local mg = QT28.mergeTransLists({
+        { { trans_id = "a", text = "base" }, { trans_id = "b" } },
+        { { trans_id = "a", text = "aux" }, { trans_id = "c" } },
+    })
+    eq(#mg, 3, "nd28: merge dedups by trans_id")
+    eq(mg[1].text, "base", "nd28: first list wins the collision")
+    eq(mg[3].trans_id, "c", "nd28: package-only ids append in order")
+    eq(#QT28.mergeTransLists({}), 0, "nd28: empty merge safe")
+
+    -- source pins: the merge is actually WIRED end to end
+    local tsrc28 = io.open(PLUGIN_DIR .. "/quran_text.lua"):read("*a")
+    eq(tsrc28:find("function M.invalidate", 1, true) ~= nil, true,
+        "nd28: connection-cache invalidation exists")
+    local msrc28 = io.open(PLUGIN_DIR .. "/main.lua"):read("*a")
+    eq(msrc28:find("allTranslationsMerged(self, conn)", 1, true) ~= nil,
+        true, "nd28: Settings roster reads the merged list")
+    local bsrc28 = io.open(PLUGIN_DIR .. "/quran_browser.lua"):read("*a")
+    eq(bsrc28:find("searchTranslationAll(quran, tconn", 1, true) ~= nil,
+        true, "nd28: global search spans installed packages")
+    local asrc28 = io.open(PLUGIN_DIR .. "/quran_assets.lua"):read("*a")
+    eq(asrc28:find('recordInstall("translations"', 1, true) ~= nil, true,
+        "nd28: installs recorded under their own kind")
+    local n_inv = 0
+    for _ in asrc28:gmatch("textInvalidate%(browser%)") do
+        n_inv = n_inv + 1
+    end
+    -- 3 = the helper definition + the install call + the uninstall call
+    eq(n_inv, 3, "nd28: install AND uninstall drop the text conn cache")
+    eq(asrc28:find('_("Ready to use. No restart needed.")', 1, true) ~= nil,
+        true, "nd28: no-restart contract on install")
+    eq(asrc28:find('_("Translations") .. " (" .. nt', 1, true) ~= nil, true,
+        "nd28: Content & features carries the Translations door")
+end
+
 -- Shared facet taxonomy (owner 2026-07-20): entry titles, language shelf
 -- titles, and shelf grouping mirror scripts/gen_opds.py exactly.
 do
@@ -4455,6 +4532,87 @@ if have_text and sq3_ok then
         .. "'\"entirely merciful\"' AND surah=1 AND ayah=1"))
     eq(ehit, 1, "text-db: english FTS roundtrip")
     tconn:close()
+
+    -- ND-28: the multi-db roster merge against a live aux fixture
+    -- (created here) and, when the ebook repo has built them, a real
+    -- per-translation package
+    local aux_path = os.tmpname() .. "-nd28.sqlite"
+    local ac = SQ3.open(aux_path)
+    ac:exec([[
+        CREATE TABLE translation (trans_id TEXT, surah INT, ayah INT, text TEXT);
+        CREATE TABLE trans_meta (trans_id TEXT, name TEXT, lang TEXT, source TEXT);
+        CREATE TABLE meta (key TEXT, value TEXT);
+        CREATE VIRTUAL TABLE trans_fts USING fts5(
+          text_norm, trans_id UNINDEXED, surah UNINDEXED, ayah UNINDEXED);
+        INSERT INTO translation VALUES
+          ('zz-qultest', 1, 6, 'zanzibar aux row'),
+          ('en-sahih', 1, 6, 'DUPLICATE MUST LOSE');
+        INSERT INTO trans_meta VALUES
+          ('zz-qultest', 'Test Package', 'zz', 'test'),
+          ('en-sahih', 'Duplicate Sahih', 'en', 'test');
+        INSERT INTO meta VALUES ('schema_version', '1');
+        INSERT INTO trans_fts VALUES ('zanzibar aux row', 'zz-qultest', 1, 6);
+    ]])
+    ac:close()
+    local QTX = dofile(PLUGIN_DIR .. "/quran_text.lua")
+    local bconn = QTX.openPath(text_db)
+    eq(bconn ~= nil, true, "nd28-db: base package opened")
+    QTX.findTranslationDbs = function() return { aux_path } end
+    local mq28 = {}
+    local by_id = {}
+    for _i, t in ipairs(QTX.translationsAll(mq28, bconn, 1, 6)) do
+        by_id[t.trans_id] = t.text
+    end
+    eq(by_id["zz-qultest"], "zanzibar aux row",
+        "nd28-db: aux translation merged into the ayah roster")
+    eq(by_id["en-sahih"] ~= "DUPLICATE MUST LOSE", true,
+        "nd28-db: base wins the trans_id collision")
+    eq(#QTX.allTranslationsMerged(mq28, bconn), 8,
+        "nd28-db: settings roster = 7 base + 1 aux, duplicate collapsed")
+    local en28 = QTX.enabledTranslations(mq28, bconn, 1, 6)
+    eq(en28[1].trans_id, "en-sahih",
+        "nd28-db: default order still leads with Saheeh")
+    eq(#en28, 8, "nd28-db: enabled roster spans installed packages")
+    local zzhit = false
+    for _i, h in ipairs(QTX.searchTranslationAll(mq28, bconn, "zanzibar", 20)) do
+        if h.trans_id == "zz-qultest" then zzhit = true end
+    end
+    eq(zzhit, true, "nd28-db: translation search spans installed packages")
+    -- a package failing the schema gate is skipped, never fatal
+    local bad_path = os.tmpname() .. "-nd28bad.sqlite"
+    local bc = SQ3.open(bad_path)
+    bc:exec("CREATE TABLE meta (key TEXT, value TEXT);"
+        .. "INSERT INTO meta VALUES ('schema_version', '99');")
+    bc:close()
+    QTX.findTranslationDbs = function() return { bad_path } end
+    eq(#QTX.auxConns(mq28), 0, "nd28-db: schema-gated package skipped")
+
+    local pkg_db = DATA_ROOT
+        .. "/output/text_data/translations/text_en_sahih-v1.sqlite"
+    local have_pkg = io.open(pkg_db)
+    if have_pkg then have_pkg:close() end
+    if have_pkg then
+        QTX.findTranslationDbs = function() return { pkg_db } end
+        local pconn = QTX.auxConns(mq28)[1]
+        eq(pconn ~= nil, true, "nd28-pkg: built package passes the gate")
+        eq(tostring(pconn:rowexec(
+            "SELECT value FROM meta WHERE key='extract'")),
+            "quran_text_translation", "nd28-pkg: extract identity")
+        eq(tonumber(pconn:rowexec("SELECT count(*) FROM translation")),
+            6236, "nd28-pkg: full ayah coverage")
+        local pt = tostring(pconn:rowexec(
+            "SELECT text FROM translation WHERE surah=1 AND ayah=6"))
+        local bt = tostring(bconn:rowexec("SELECT text FROM translation"
+            .. " WHERE trans_id='en-sahih' AND surah=1 AND ayah=6"))
+        eq(pt, bt, "nd28-pkg: 1:6 byte-parity with the monolithic en-sahih")
+        eq(#QTX.allTranslationsMerged(mq28, bconn), 7,
+            "nd28-pkg: duplicate package collapses in the live roster")
+    else
+        print("skip nd28-pkg tests (no built package in the ebook repo)")
+    end
+    QTX.invalidate()
+    os.remove(aux_path)
+    os.remove(bad_path)
 else
     print("skip text-db tests (staged extract or sqlite binding unavailable)")
 end

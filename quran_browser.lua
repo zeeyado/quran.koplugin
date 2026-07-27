@@ -275,7 +275,7 @@ function Browser:showSearchResults(q)
                 })
             end
             endGroup()
-            for _i, h in ipairs(qt.searchTranslation(tconn, fts, 20)) do
+            for _i, h in ipairs(qt.searchTranslationAll(quran, tconn, fts, 20)) do
                 table.insert(items, {
                     text = string.format("%d:%d  %s", h.surah, h.ayah,
                         snippet(h.text, 60)),

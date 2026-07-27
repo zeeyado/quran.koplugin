@@ -79,6 +79,51 @@ UIManager:scheduleIn(12, function()
                 end
             end)
         end
+    elseif mode == "translations" then
+        -- ND-28: Library & assets → Translations (by language).
+        -- KO_MECHTEST_TRANSINDEX = path to a built index.json (the real
+        -- 203-entry registry) injected as the manifest — no network;
+        -- falls back to a tiny inline mock. KO_MECHTEST_TRANSLANG
+        -- drills into that language's edition list at +1.5s.
+        withBrowser(function(b)
+            local assets = b.assetsModule and b:assetsModule()
+            if not assets then return end
+            local entries
+            local idx = os.getenv("KO_MECHTEST_TRANSINDEX")
+            if idx then
+                local f = io.open(idx)
+                if f then
+                    local ok, data = pcall(require("json").decode, f:read("*a"))
+                    f:close()
+                    if ok then entries = data end
+                end
+            end
+            entries = entries or {
+                { name = "text_en_a", bookname = "Mock English A",
+                  lang_name = "English" },
+                { name = "text_ur_a", bookname = "Mock Urdu A",
+                  lang_name = "Urdu" },
+            }
+            for _i, e in ipairs(entries) do
+                e.version = e.version or "1.0"
+                e.size = e.size or 400000
+            end
+            assets._manifest = { translations = entries }
+            assets.showTranslations(b)
+            local lang = os.getenv("KO_MECHTEST_TRANSLANG")
+            if lang then
+                UIManager:scheduleIn(1.5, function()
+                    local menu = b.menu
+                    if not (menu and menu.item_table) then return end
+                    for _i, it in ipairs(menu.item_table) do
+                        if it.text and it.text:find("^" .. lang .. " ") then
+                            it.callback()
+                            break
+                        end
+                    end
+                end)
+            end
+        end)
     elseif mode == "getbooks" then
         -- DA-6(b): the recursive facet catalog root (needs network or
         -- a cached catalog for the row counts)

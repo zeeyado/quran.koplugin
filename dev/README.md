@@ -58,8 +58,10 @@ KO_HOME=$KOHOME KO_MECHTEST=1 KO_MECHTEST_MODE=panel \
 
 Modes: `panel · goto · card · popup · browser · themes · themeflow ·
 uap · phrases · similar · surahhub · dictindex · getbooks · marker ·
-markertap` (markertap drives the real patched onGotoLink; layer via
-`KO_MECHTEST_MARKER`, "off" must show nothing). Gotchas: the book path must be
+markertap · translations` (markertap drives the real patched onGotoLink;
+layer via `KO_MECHTEST_MARKER`, "off" must show nothing; translations
+takes `KO_MECHTEST_TRANSINDEX` = a built index.json injected as the
+manifest and `KO_MECHTEST_TRANSLANG` to drill into one language). Gotchas: the book path must be
 **absolute** (a
 relative path silently opens the file manager); the first run of a fresh
 KO_HOME shows a one-time color-rendering popup: run twice and use the

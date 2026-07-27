@@ -3300,7 +3300,7 @@ function Quran:_translationMenuItems()
         return { { text = _("Quran text package not installed"),
             enabled = false } }
     end
-    local all = qt.allTranslations(conn)
+    local all = qt.allTranslationsMerged(self, conn)
     local items = {
         {
             text = _("Order translations"),

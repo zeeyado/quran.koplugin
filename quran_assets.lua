@@ -956,15 +956,24 @@ local function buildDataItems(browser, man)
 end
 
 -- Q4 reframe: the "Content & features" screen = the feature-named data
--- packages, then a "Dictionaries (N)" drill-in into the large,
--- content-named dictionary list (kept behind a door, not flattened).
+-- packages, then drill-in doors for the two large content-named lists:
+-- "Translations (N)" by language (ND-28) and "Dictionaries (N)".
 local function buildContentItems(browser, man)
     local items = buildDataItems(browser, man)
-    local n = (man and man.dicts) and #man.dicts or 0
-    if n > 0 then
-        if #items > 0 then items[#items].separator = true end
+    local nt = (man and man.translations) and #man.translations or 0
+    local nd = (man and man.dicts) and #man.dicts or 0
+    if (nt > 0 or nd > 0) and #items > 0 then
+        items[#items].separator = true
+    end
+    if nt > 0 then
         table.insert(items, {
-            text = _("Dictionaries") .. " (" .. n .. ")",
+            text = _("Translations") .. " (" .. nt .. ")",
+            callback = function() M.showTranslations(browser) end,
+        })
+    end
+    if nd > 0 then
+        table.insert(items, {
+            text = _("Dictionaries") .. " (" .. nd .. ")",
             callback = function() M.showDicts(browser) end,
         })
     end
@@ -1033,11 +1042,243 @@ function M.showData(browser)
     ensureManifest(function(man)
         local has_data = man.data and #man.data > 0
         local has_dicts = man.dicts and #man.dicts > 0
-        if not (has_data or has_dicts) then
+        local has_trans = man.translations and #man.translations > 0
+        if not (has_data or has_dicts or has_trans) then
             notify(_("The catalog lists no content packages yet."))
             return
         end
         browser:navigateForward(_("Content & features"), buildContentItems(browser, man))
+    end)
+end
+
+-- ---------------------------------------------------------------------
+-- Translation packages (ND-28, owner-decided round 20): one sqlite per
+-- QUL edition, ~200 of them in ~85 languages — navigated BY LANGUAGE,
+-- downloaded individually. They install next to the data packages
+-- (data/quran/, file pattern text_<slug>-vN.sqlite) and quran_text
+-- merges every installed one into the translation roster at query time,
+-- so install/uninstall need no restart — just a connection-cache drop.
+-- ---------------------------------------------------------------------
+
+function M.findInstalledTranslations(root)
+    local lfs = require("libs/libkoreader-lfs")
+    local found = {}
+    local dir = root or dataInstallDir()
+    if lfs.attributes(dir, "mode") ~= "directory" then return found end
+    pcall(function()
+        for entry in lfs.dir(dir) do
+            local name = entry:match("^(text_[%w_]+)%-v%d+%.sqlite$")
+            if name then found[name] = dir end
+        end
+    end)
+    return found
+end
+
+-- Delete every version of one translation package. Returns files removed.
+function M.removeTranslationFiles(name, dir)
+    local lfs = require("libs/libkoreader-lfs")
+    if not (name and dir) or lfs.attributes(dir, "mode") ~= "directory" then
+        return 0
+    end
+    local pat = "^" .. name .. "%-v%d+%.sqlite$"
+    local removed = 0
+    pcall(function()
+        for entry in lfs.dir(dir) do
+            if entry:match(pat) then
+                if os.remove(dir .. "/" .. entry) then removed = removed + 1 end
+            end
+        end
+    end)
+    return removed
+end
+
+--- Pure: manifest translation entries -> { { lang_name, entries }, ... },
+-- languages alphabetical, entries by display name within each.
+function M.groupTranslationsByLang(entries)
+    local by = {}
+    for _i, e in ipairs(entries or {}) do
+        local lang = e.lang_name or "?"
+        if not by[lang] then by[lang] = {} end
+        table.insert(by[lang], e)
+    end
+    local out = {}
+    for lang, list in pairs(by) do
+        table.sort(list, function(a, b)
+            return (a.bookname or a.name) < (b.bookname or b.name)
+        end)
+        table.insert(out, { lang_name = lang, entries = list })
+    end
+    table.sort(out, function(a, b) return a.lang_name < b.lang_name end)
+    return out
+end
+
+-- Retire quran_text's cached connections so the next roster query
+-- re-scans the install dir (the no-restart contract).
+local function textInvalidate(browser)
+    local quran = browser and browser.quran
+    local qt = quran and quran._textModule and quran:_textModule()
+    if qt and qt.invalidate then qt.invalidate() end
+end
+
+local function installTranslation(browser, item, after)
+    local NetworkMgr = require("ui/network/manager")
+    NetworkMgr:runWhenOnline(function()
+        local util = require("util")
+        local entry = item.entry
+        local target = dataInstallDir()
+        local tmp = target .. "/" .. entry.filename
+        local ok, err = withInfo(
+            _("Downloading") .. " " .. (entry.bookname or entry.name)
+                .. " (" .. M.friendlySize(entry.size) .. ")…",
+            function()
+                util.makePath(target)
+                local dok, derr = verifiedDownload(entry, tmp)
+                if not dok then return nil, derr end
+                local uok, uerr = unpackArchive(tmp, target, true)
+                if not uok then return nil, tostring(uerr) end
+                return true
+            end)
+        os.remove(tmp)
+        if not ok then
+            notify(err or _("Install failed."), true)
+            return
+        end
+        recordInstall("translations", entry.name, entry.version)
+        textInvalidate(browser)
+        logger.info("quran.koplugin: installed translation package",
+            entry.name, "v" .. entry.version)
+        if after then after() end
+        notify(_("Installed:") .. " " .. (entry.bookname or entry.name)
+            .. "\n" .. _("Ready to use. No restart needed."))
+    end)
+end
+
+local function uninstallTranslation(browser, it, rerender)
+    local e = it.entry
+    local removed = M.removeTranslationFiles(e.name, it.dir)
+    forgetInstall("translations", e.name)
+    textInvalidate(browser)
+    logger.info("quran.koplugin: uninstalled translation package", e.name,
+        "(" .. removed .. " files)", "from", tostring(it.dir))
+    if rerender then rerender() end
+    notify(_("Removed:") .. " " .. (e.bookname or e.name))
+end
+
+function M.showTranslationDialog(browser, it, rerender)
+    local UIManager = require("ui/uimanager")
+    local ButtonDialog = require("ui/widget/buttondialog")
+    local ConfirmBox = require("ui/widget/confirmbox")
+    local e = it.entry
+    local verb = it.state == "absent" and _("Install")
+        or (it.state == "update" and _("Update to") or _("Reinstall"))
+    local dialog
+    local buttons = {
+        {{
+            text = verb .. " v" .. e.version .. " (" .. M.friendlySize(e.size) .. ")",
+            callback = function()
+                UIManager:close(dialog)
+                installTranslation(browser, it, rerender)
+            end,
+        }},
+    }
+    if it.state ~= "absent" then
+        table.insert(buttons, {{
+            text = _("Uninstall"),
+            callback = function()
+                UIManager:close(dialog)
+                UIManager:show(ConfirmBox:new{
+                    text = _("Remove this translation from the device?") .. "\n"
+                        .. (e.bookname or e.name),
+                    ok_text = _("Uninstall"),
+                    ok_callback = function()
+                        uninstallTranslation(browser, it, rerender)
+                    end,
+                })
+            end,
+        }})
+    end
+    table.insert(buttons, {{
+        text = _("Close"),
+        callback = function() UIManager:close(dialog) end,
+    }})
+    dialog = ButtonDialog:new{
+        title = (e.bookname or e.name)
+            .. ((e.rows and e.rows > 0 and e.rows < 6236)
+                and ("\n" .. e.rows .. " " .. _("of 6236 ayahs")) or "")
+            .. "\n" .. e.filename,
+        buttons = buttons,
+    }
+    UIManager:show(dialog)
+end
+
+local function buildTranslationItems(browser, entries, rerender)
+    local merged = M.mergeDictState(
+        entries, M.findInstalledTranslations(),
+        assetSettings():readSetting("translations"))
+    -- mergeDictState sorts on the slug name; the screen reads better by
+    -- display name
+    table.sort(merged, function(a, b)
+        return (a.entry.bookname or a.entry.name)
+            < (b.entry.bookname or b.entry.name)
+    end)
+    local items = {}
+    for _i, it in ipairs(merged) do
+        local e = it.entry
+        local mandatory
+        if it.state == "update" then
+            mandatory = "v" .. (it.installed_version or "?") .. " → v" .. e.version
+        elseif it.state == "unknown" then
+            mandatory = _("installed")
+        elseif it.state == "current" then
+            mandatory = "v" .. e.version
+        else
+            mandatory = M.friendlySize(e.size)
+        end
+        table.insert(items, {
+            text = (it.state ~= "absent" and "✓ " or "") .. (e.bookname or e.name),
+            mandatory = mandatory,
+            callback = function() M.showTranslationDialog(browser, it, rerender) end,
+        })
+    end
+    return items
+end
+
+local function showTranslationLang(browser, lang_name, entries)
+    local rerender
+    rerender = function()
+        if browser.menu then
+            browser.menu:switchItemTable(lang_name,
+                buildTranslationItems(browser, entries, rerender))
+        end
+    end
+    browser:navigateForward(lang_name,
+        buildTranslationItems(browser, entries, rerender))
+end
+
+function M.showTranslations(browser)
+    ensureManifest(function(man)
+        local entries = man.translations
+        if not entries or #entries == 0 then
+            notify(_("The catalog lists no translation packages yet."))
+            return
+        end
+        local groups = M.groupTranslationsByLang(entries)
+        local installed = M.findInstalledTranslations()
+        local items = {}
+        for _i, g in ipairs(groups) do
+            local n_inst = 0
+            for _j, e in ipairs(g.entries) do
+                if installed[e.name] then n_inst = n_inst + 1 end
+            end
+            table.insert(items, {
+                text = g.lang_name .. " (" .. #g.entries .. ")",
+                mandatory = n_inst > 0 and ("✓ " .. n_inst) or nil,
+                callback = function()
+                    showTranslationLang(browser, g.lang_name, g.entries)
+                end,
+            })
+        end
+        browser:navigateForward(_("Translations"), items)
     end)
 end
 

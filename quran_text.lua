@@ -1,13 +1,19 @@
 --[[--
 Quran text & translation access — reads the text-vN.sqlite data package
 (built by quran-explorer kb/export/quran_text_extract.py, shipped as the
-quran_text asset). Provides the ayah text the browser renders in-window
-(unified ayah page, Reader) and, in the search wave, the FTS queries.
+quran_text asset) PLUS any installed per-translation packages
+(text_<slug>-vN.sqlite, ND-28: one sqlite per QUL edition, built by
+quran-ebook tools/build_text_translations.py --packages). Provides the
+ayah text the browser renders in-window (unified ayah page, Reader) and
+the FTS queries; translation rosters merge base-first across every
+installed package (mergeTransLists).
 
 Tables (contract, schema_version 1): ayah(riwayah, surah, ayah, text,
 text_plain, page, juz) — hafs + warsh, native numbering each; translation
 (trans_id, surah, ayah, text) — Hafs numbering; trans_meta; ayah_fts /
 trans_fts over pre-normalized text (see quran_norm.lua); meta.
+Per-translation packages carry translation/trans_meta/trans_fts/meta
+only (no ayah tables) — the BASE package stays required for Arabic text.
 --]]
 
 local logger = require("logger")
@@ -21,10 +27,9 @@ M.SCHEMA_VERSION = "1"
 -- Database access (same discovery/gate idiom as quran_roots/quran_qul)
 -- ---------------------------------------------------------------------
 
--- Locate text-vN.sqlite: asset-manager install dir first, then the
--- plugin dir (dev convenience; gitignored there).
-function M.findDb(quran)
-    local lfs = require("libs/libkoreader-lfs")
+-- Search dirs for text packages: asset-manager install dir first, then
+-- the plugin dir (dev convenience; gitignored there).
+local function searchDirs(quran)
     local dirs = {}
     local ok, DataStorage = pcall(require, "datastorage")
     if ok then
@@ -33,7 +38,14 @@ function M.findDb(quran)
     if quran and quran.path then
         table.insert(dirs, quran.path)
     end
-    for _i, dir in ipairs(dirs) do
+    return dirs
+end
+
+-- Locate text-vN.sqlite (the BASE package: Arabic text + bundled
+-- translations).
+function M.findDb(quran)
+    local lfs = require("libs/libkoreader-lfs")
+    for _i, dir in ipairs(searchDirs(quran)) do
         if lfs.attributes(dir, "mode") == "directory" then
             for entry in lfs.dir(dir) do
                 if entry:match("^text%-v%d+%.sqlite$") then
@@ -44,12 +56,31 @@ function M.findDb(quran)
     end
 end
 
--- Open (and cache) the package; validates meta.schema_version.
--- Returns conn or nil, err.
-function M.openPath(path)
-    if M._conn and M._db_path == path then
-        return M._conn
+-- ND-28 per-translation packages: text_<slug>-vN.sqlite next to the base
+-- package (underscore vs the base's dash — the patterns never overlap).
+-- Highest version wins per name; results sorted by path for a stable
+-- merge order. Returns { "/dir/text_en_sahih-v1.sqlite", ... }.
+function M.findTranslationDbs(quran)
+    local lfs = require("libs/libkoreader-lfs")
+    local best = {}
+    for _i, dir in ipairs(searchDirs(quran)) do
+        if lfs.attributes(dir, "mode") == "directory" then
+            for entry in lfs.dir(dir) do
+                local name, ver = entry:match("^(text_[%w_]+)%-v(%d+)%.sqlite$")
+                if name and (not best[name] or tonumber(ver) > best[name].ver) then
+                    best[name] = { ver = tonumber(ver), path = dir .. "/" .. entry }
+                end
+            end
+        end
     end
+    local out = {}
+    for _name, b in pairs(best) do table.insert(out, b.path) end
+    table.sort(out)
+    return out
+end
+
+-- Open one package read-only, gated on meta.schema_version (no caching).
+local function openGated(path)
     local ok, SQ3 = pcall(require, "lua-ljsqlite3/init")
     if not ok then
         return nil, _("SQLite support not available in this KOReader build.")
@@ -68,6 +99,16 @@ function M.openPath(path)
         pcall(function() conn:close() end)
         return nil, _("Quran text database has an unsupported format. Update the plugin or the data package.")
     end
+    return conn
+end
+
+-- Open (and cache) the base package. Returns conn or nil, err.
+function M.openPath(path)
+    if M._conn and M._db_path == path then
+        return M._conn
+    end
+    local conn, err = openGated(path)
+    if not conn then return nil, err end
     M._conn = conn
     M._db_path = path
     logger.info("quran.koplugin: opened text db", path)
@@ -80,6 +121,44 @@ function M.ensureDb(quran)
         return nil, _("Quran text package not installed. Get it from Library & assets in the Quran Explorer.")
     end
     return M.openPath(path)
+end
+
+-- Open (and cache) every installed per-translation package. The cache
+-- keys on the discovered path set, so a package installed mid-session is
+-- picked up on the next call after M.invalidate() (or a re-scan finding
+-- new files). Returns { conn, ... } (possibly empty).
+function M.auxConns(quran)
+    local paths = M.findTranslationDbs(quran)
+    local sig = table.concat(paths, ";")
+    if M._aux and M._aux.sig == sig then
+        return M._aux.conns
+    end
+    if M._aux then
+        for _i, c in ipairs(M._aux.conns) do pcall(function() c:close() end) end
+    end
+    local conns = {}
+    for _i, path in ipairs(paths) do
+        local conn, err = openGated(path)
+        if conn then
+            table.insert(conns, conn)
+        else
+            logger.info("quran.koplugin: skipping translation package", path, err)
+        end
+    end
+    M._aux = { sig = sig, conns = conns }
+    return conns
+end
+
+-- Drop every cached connection (called by the asset manager after a
+-- translation/text package install or uninstall, so the next query
+-- re-scans without a restart).
+function M.invalidate()
+    if M._conn then pcall(function() M._conn:close() end) end
+    M._conn, M._db_path = nil, nil
+    if M._aux then
+        for _i, c in ipairs(M._aux.conns) do pcall(function() c:close() end) end
+    end
+    M._aux = nil
 end
 
 local function rows(conn, sql, bind)
@@ -157,6 +236,21 @@ function M.searchTranslation(conn, fts_query, limit)
     return out
 end
 
+--- Translation FTS across the base package AND every installed
+-- per-translation package (rank ordering holds within each db; the
+-- merged list keeps base hits first and truncates at limit).
+function M.searchTranslationAll(quran, conn, fts_query, limit)
+    limit = limit or 20
+    local out = M.searchTranslation(conn, fts_query, limit)
+    for _i, aux in ipairs(M.auxConns(quran)) do
+        if #out >= limit then break end
+        for _j, h in ipairs(M.searchTranslation(aux, fts_query, limit - #out)) do
+            table.insert(out, h)
+        end
+    end
+    return out
+end
+
 --- All shipped translations of a (Hafs-numbered) ayah, with source names.
 function M.translations(conn, surah, ayah)
     local out = {}
@@ -185,6 +279,42 @@ function M.allTranslations(conn)
     return out
 end
 
+--- Pure: merge ordered translation lists, first occurrence of a
+-- trans_id wins (ND-28: the base package leads, so a per-translation
+-- package that duplicates a bundled edition never double-lists and the
+-- user's trans_id-keyed settings keep applying).
+function M.mergeTransLists(lists)
+    local out, seen = {}, {}
+    for _i, list in ipairs(lists) do
+        for _j, t in ipairs(list or {}) do
+            if t.trans_id and not seen[t.trans_id] then
+                seen[t.trans_id] = true
+                table.insert(out, t)
+            end
+        end
+    end
+    return out
+end
+
+--- M.translations across base + every installed translation package.
+function M.translationsAll(quran, conn, surah, ayah)
+    local lists = { M.translations(conn, surah, ayah) }
+    for _i, aux in ipairs(M.auxConns(quran)) do
+        table.insert(lists, M.translations(aux, surah, ayah))
+    end
+    return M.mergeTransLists(lists)
+end
+
+--- M.allTranslations across base + every installed translation package
+-- (the Settings roster: every id the merge can surface).
+function M.allTranslationsMerged(quran, conn)
+    local lists = { M.allTranslations(conn) }
+    for _i, aux in ipairs(M.auxConns(quran)) do
+        table.insert(lists, M.allTranslations(aux))
+    end
+    return M.mergeTransLists(lists)
+end
+
 --- Pure: apply the user's roster settings to a translations list —
 -- `off` = set of disabled trans_ids, `order` = array of trans_ids
 -- (unlisted ids keep db order at the tail). Nil settings = unchanged.
@@ -208,15 +338,16 @@ function M.applyRoster(all, off, order)
     return out
 end
 
---- The user's translation roster for an ayah: M.translations filtered
--- by the translations_off set and ordered by translations_order (both
--- plugin settings; owner 2026-07-18 — enable/disable + sort).
+--- The user's translation roster for an ayah: base + installed
+-- packages (translationsAll), filtered by the translations_off set and
+-- ordered by translations_order (both plugin settings; owner
+-- 2026-07-18 — enable/disable + sort; ND-28 folds packages in).
 function M.enabledTranslations(quran, conn, surah, ayah)
     local s = quran and quran.settings
     -- default order: Saheeh International leads (the package's
     -- original sole translation — plain ORDER BY trans_id would
     -- promote en-asad), everything else keeps db order
-    return M.applyRoster(M.translations(conn, surah, ayah),
+    return M.applyRoster(M.translationsAll(quran, conn, surah, ayah),
         s and s:readSetting("translations_off") or nil,
         s and s:readSetting("translations_order") or { "en-sahih" })
 end
