@@ -1366,6 +1366,9 @@ function M.showBookDialog(browser, v, opts)
     local UIManager = require("ui/uimanager")
     local ButtonDialog = require("ui/widget/buttondialog")
     local ConfirmBox = require("ui/widget/confirmbox")
+    -- function-level: the Download row's callback below needs it too (it
+    -- used to index an undefined global and crash on tap)
+    local lfs = require("libs/libkoreader-lfs")
     if type(opts) ~= "table" then opts = { installed_dir = opts } end
     local rec = opts.rec
     local refresh = opts.refresh or function() end
@@ -1380,7 +1383,6 @@ function M.showBookDialog(browser, v, opts)
         dir, path, filename = rec.dir, rec.path, rec.filename
         new_present = rec.new_present or false
     elseif opts.installed_dir and v then
-        local lfs = require("libs/libkoreader-lfs")
         dir = opts.installed_dir
         if lfs.attributes(dir .. "/" .. v.filename, "mode") == "file" then
             filename = v.filename

@@ -29,9 +29,9 @@ Path resolution (all auto-detected, override via env):
 | `QURAN_EBOOK_DIR` | `../quran-ebook` | `data/*.sqlite` + `output/` build artifacts for the real-db round trips (skip when absent) |
 | `KOREADER_DIR` | `/Applications/KOReader.app/Contents/koreader` | sqlite binding + CREngine for the real-document tests (skip when absent) |
 
-Full run on the reference setup: 1360 tests. Stock-luajit run without
-KOReader/data: ~944 tests + skips, still authoritative for everything
-that ran.
+Full run on the reference setup: 1857 tests (2026-11-10). Stock-luajit
+run without KOReader/data: 1330 tests + skips, still authoritative for
+everything that ran.
 
 CI (`.github/workflows/check.yml`) parse-checks every Lua file and runs
 the harness on stock LuaJIT.

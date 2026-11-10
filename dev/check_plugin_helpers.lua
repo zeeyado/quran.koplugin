@@ -360,6 +360,25 @@ eq(QA.anchorConvention({ ui = { document = conv_doc_end } }), "end",
     "conv: inline end-marker -> end")
 eq(QA.anchorConvention({ ui = { document = { info = {} } } }), "end",
     "conv: unprobeable engine defaults to end")
+-- What the engine REALLY returns (installed KOReader, both DOM versions):
+-- the flow end marker <span class="ayah-number"> is display:inline-block,
+-- hence its own final node, so from_final_parent serializes the span WITH
+-- the id on its opening tag. The tag decides, not the id position.
+local function conv_of(block_html)
+    return QA.anchorConvention({ ui = { document = {
+        info = {},
+        getPageFromXPointer = function(_, xp)
+            if xp:find("ayah%-2%-2") then return 42 end
+        end,
+        getHTMLFromXPointer = function() return block_html end,
+    } } })
+end
+eq(conv_of('<span class="ayah-number" id="_doc_fragment_3_ ayah-2-2">\217\162</span>'),
+    "end", "conv: inline-block flow end marker (engine-real) -> end")
+eq(conv_of('<div class="wbw-ayah standalone " id="_doc_fragment_3_ ayah-2-2"><inlineBox>'),
+    "start", "conv: wbw ayah div (engine-real) -> start")
+eq(conv_of('<p class="ayah-text standalone " id="_doc_fragment_3_ ayah-2-2">x</p>'),
+    "start", "conv: arabic-only ayah block (engine-real) -> start")
 
 -- visibleAyahRange DOM path: immune to the lazy-pagination clamp that
 -- makes page-number comparison overshoot (anchors past the frontier all
@@ -442,6 +461,43 @@ eq(QA.fragPrefix("/body/DocFragment[79]/body/p[65]/text().0"),
     "_doc_fragment_78_ ", "fragPrefix: parsed from view xpointer")
 eq(QA.fragPrefix("CUR"), nil, "fragPrefix: nil for non-fragment xpointer")
 eq(QA.fragPrefix(nil), nil, "fragPrefix: nil input")
+-- crengine 137cba4a (DOM version 20260812, KOReader nightlies since
+-- 2026-08-14): explicit [1] on every first sibling. Strings captured from
+-- the installed engine (2026-10-01).
+eq(QA.fragIndex("/body/DocFragment[79]/body/p[65]/text().0"), 79,
+    "fragIndex: legacy shape (DOM 20240114)")
+eq(QA.fragIndex("/body[1]/DocFragment[79]/body[1]/p[65]/text()[1].0"), 79,
+    "fragIndex: explicit-[1] shape (DOM 20260812)")
+eq(QA.fragPrefix("/body[1]/DocFragment[79]/body[1]/p[60]/span[1]/text()[1].0"),
+    "_doc_fragment_78_ ", "fragPrefix: explicit-[1] shape")
+eq(QA.fragPrefix("/body[1]/DocFragment[4]/body[1]/p[44]/span[1]"),
+    "_doc_fragment_3_ ", "fragPrefix: element xpointer, no offset")
+eq(QA.fragPrefix("/body[1]/DocFragment[19]/body[1]/div[1]/text()[123].60"),
+    "_doc_fragment_18_ ", "fragPrefix: deep text offset")
+eq(QA.fragIndex("/body[1]/p[3]/text()[1].0"), nil,
+    "fragIndex: single-file doc (no DocFragment) -> nil")
+eq(QA.fragIndex("/body[2]/DocFragment[3]/p"), nil,
+    "fragIndex: only body[1] is the root")
+eq(QA.fragIndex(42), nil, "fragIndex: non-string -> nil")
+
+-- blockAyahId: the containment / convention probe, on engine-real
+-- serializations (ids keep the "_doc_fragment_N_ " rename)
+eq(select(2, QA.blockAyahId('<p class="ayah-text bilin " id="_doc_fragment_78_ ayah-77-30">x</p>')),
+    30, "blockAyahId: renamed id on the ayah block")
+eq(select(2, QA.blockAyahId('<p class="x" id="ayah-2-3">')), 3,
+    "blockAyahId: plain id")
+eq(select(2, QA.blockAyahId('  <div id="_doc_fragment_3_ ayah-2-2" class="wbw-ayah">')), 2,
+    "blockAyahId: id before class, leading space")
+eq(QA.blockAyahId('<span class="ayah-number" id="_doc_fragment_3_ ayah-2-2">2</span>'), nil,
+    "blockAyahId: inline-block end marker is not an ayah block")
+eq(QA.blockAyahId('<div class="surah-text">a<span class="ayah-number" id="_doc_fragment_3_ ayah-2-1">1</span></div>'),
+    nil, "blockAyahId: an inner id never matches (flow paragraph)")
+eq(QA.blockAyahId('<span class="hizb-marker">x</span>'), nil,
+    "blockAyahId: hizb marker block (page tops at quarter-hizb boundaries)")
+eq(QA.blockAyahId('<tabularBox T="MissingChildCell">x</tabularBox>'), nil,
+    "blockAyahId: wbw word box")
+eq(QA.blockAyahId('<p id="_doc_fragment_3_ ayah-2-2-x">'), nil,
+    "blockAyahId: the id must END with ayah-S-A")
 
 -- Engine-faithful fake: ONLY prefixed anchors resolve (plain forms
 -- return nil, like the real engine's compareXPointers)
@@ -495,6 +551,72 @@ eq(a, 30, "findAyah containment: translation ayah-ref wins")
 s, a = QA.findAyahForPage(mk_contain_quran(32.7,
     "<p>inline flow, no ayah marker on the block</p>"), 2378)
 eq(a, 33, "findAyah containment: unmarked block -> DOM search fallback")
+s, a = QA.findAyahForPage(mk_contain_quran(31.5,
+    '<p class="ayah-text bilin " id="_doc_fragment_78_ ayah-77-31"><span>x</span></p>'), 2378)
+eq(a, 31, "findAyah containment: engine-real renamed id wins")
+s, a = QA.findAyahForPage(mk_contain_quran(32.7,
+    '<span class="ayah-number" id="_doc_fragment_78_ ayah-77-32">x</span>'), 2378)
+eq(a, 33, "findAyah containment: an inline-block end marker never short-circuits")
+
+-- start-anchored books (ayah + word layouts): the view top is a node
+-- INSIDE the ayah's block, which compares AFTER that block's own anchor,
+-- so the answer is the LAST anchor at-or-before it. First-at-or-after
+-- is one ayah late wherever containment cannot fire (word-inline pages,
+-- hizb-marker page tops), measured headlessly 2026-10-01.
+do
+    local function start_q(v)
+        local q = mk_dom_quran(v)
+        q._anchor_conv = "start"
+        return q
+    end
+    eq(select(2, QA.findAyahForPage(start_q(32.7), 580)), 32,
+        "findAyah DOM start-anchored: inside 32 -> 32 (end rule says 33)")
+    eq(select(2, QA.findAyahForPage(start_q(1.2), 580)), 1,
+        "findAyah DOM start-anchored: inside 1 -> 1")
+    eq(select(2, QA.findAyahForPage(start_q(0.5), 580)), 1,
+        "findAyah DOM start-anchored: before the first anchor -> 1")
+    eq(select(2, QA.findAyahForPage(start_q(2), 580)), 2,
+        "findAyah DOM start-anchored: exactly at anchor 2 -> 2")
+    eq(select(2, QA.findAyahForPage(start_q(49.5), 580)), 49,
+        "findAyah DOM start-anchored: inside 49 -> 49")
+    eq(select(2, QA.findAyahForPage(start_q(50), 580)), 50,
+        "findAyah DOM start-anchored: at the last anchor -> 50")
+    eq(select(2, QA.findAyahForPage(start_q(99), 580)), 50,
+        "findAyah DOM start-anchored: past all anchors -> 50")
+end
+
+-- visibleAyahRange, start-anchored: the block that OPENS the next page
+-- compares before that page's first text node (engine-real: next =
+-- ".../p[40]/text()[1].0", anchor 40 = p[40]); page numbers exclude it
+do
+    local CUR = "/body/DocFragment[4]/body/p[36]/text().0"  -- legacy shape: isolates F2/F4 from F1
+    local d = {
+        info = {},
+        getCurrentPage = function() return 102 end,
+        getXPointer = function() return CUR end,
+        getPageXPointer = function(_, p) return "PAGE" .. p end,
+        compareXPointers = function(_, x1, x2)
+            local function v(x)
+                if x == CUR then return 36.2 end
+                if x == "PAGE103" then return 40.2 end
+                return tonumber(x:match("^#_doc_fragment_3_ ayah%-2%-(%d+)$"))
+            end
+            local v1, v2 = v(x1), v(x2)
+            if not v1 or not v2 then return nil end
+            if v2 > v1 then return 1 elseif v2 < v1 then return -1 else return 0 end
+        end,
+        getPageFromXPointer = function(_, xp)
+            local aa = tonumber(xp:match("ayah%-2%-(%d+)$"))
+            if aa then return aa >= 40 and 103 or 102 end
+        end,
+    }
+    local q = { ui = { document = d }, _anchor_conv = "start",
+        bookAyahCount = function() return 286 end,
+        _findSurahForPage = function() return 2 end }
+    local _rs, rf, rl = QA.visibleAyahRange(q)
+    eq(rf, 36, "range start-anchored: first = the top ayah")
+    eq(rl, 39, "range start-anchored: the block opening the next page is excluded (40 -> 39)")
+end
 
 -- resolveAnchorPage: jump targets via plain, then offset-derived prefix
 local resolve_doc = {
@@ -526,6 +648,23 @@ local plain_doc_quran = {
 }
 eq(QA.resolveAnchorPage(plain_doc_quran, 3, nil), 42,
     "resolve: plain id works for non-fragment engines")
+do
+    local tried = {}
+    local nq = { ui = { document = {
+        getPageFromXPointer = function(_, xp)
+            tried[#tried + 1] = xp
+            return xp == "#_doc_fragment_78_ surah-77" and 2372 or 1
+        end,
+        getXPointer = function()
+            return "/body[1]/DocFragment[79]/body[1]/p[60]/span[1]/text()[1].0"
+        end,
+        getCurrentPage = function() return 2378 end,
+    } }, _findSurahForPage = function() return 77 end }
+    eq(QA.resolveAnchorPage(nq, 77, nil), 2372,
+        "resolve (explicit-[1] cur): surah header")
+    eq(#tried, 2, "resolve (explicit-[1] cur): offset derived from the view xpointer, no 0..8 scan")
+    eq(nq._frag_offset, 2, "resolve (explicit-[1] cur): offset cached (79 - 77)")
+end
 
 -- classifyDict / detectResources (resource auto-detection)
 eq(QA.classifyDict("Tafsir Ibn Kathir (English)"), "tafsir", "classify: ibn kathir")
@@ -743,6 +882,55 @@ do
         "marker: translations keep roster order")
     eq(QM.contentHtml({ settings = mq.settings }, "translation", 2, 255),
         nil, "marker: no text package = nil (honest notification path)")
+    -- 2026-11-10: text direction per block. MuPDF draws an RTL paragraph
+    -- left-aligned and scrambles the word after a zero-width non-joiner
+    -- (Persian, Dari, Kurdish) unless its block says dir="rtl".
+    eq(QM.textDir("In the name of Allah"), "ltr", "dir: English is ltr")
+    eq(QM.textDir("\216\168\217\135 \217\134\216\167\217\133 \216\174\216\175\216\167\217\136\217\134\216\175"),
+        "rtl", "dir: Persian is rtl")
+    eq(QM.textDir("(1) \216\168\216\179\217\133"), "rtl",
+        "dir: leading digits and brackets are skipped")
+    eq(QM.textDir("\194\171Au nom d'Allah\194\187"), "ltr",
+        "dir: a leading guillemet is neutral, French is ltr")
+    eq(QM.textDir("\208\146\208\190 \208\184\208\188\209\143"), "ltr",
+        "dir: Cyrillic is ltr")
+    eq(QM.textDir("\215\145\215\169\215\157"), "rtl", "dir: Hebrew is rtl")
+    eq(QM.textDir("\222\132\222\168\222\144\222\176\222\137\222\168"), "rtl",
+        "dir: Thaana (Divehi) is rtl")
+    eq(QM.textDir("\223\138\223\159\223\138\223\171"), "rtl",
+        "dir: N'Ko (Bambara editions) is rtl")
+    eq(QM.textDir("\229\165\137\232\135\179\228\187\129"), "ltr",
+        "dir: Chinese is ltr")
+    eq(QM.textDir("\224\164\133\224\164\178\224\165\141\224\164\178\224\164\190\224\164\185"), "ltr",
+        "dir: Devanagari is ltr")
+    eq(QM.textDir("\226\128\143abc"), "rtl", "dir: a right-to-left mark decides")
+    eq(QM.textDir("\239\180\191 And when"), "ltr",
+        "dir: an ornate parenthesis is neutral")
+    eq(QM.textDir("\226\128\156\216\167\217\132\216\173\217\133\216\175"), "rtl",
+        "dir: a curly quote before Arabic is skipped")
+    eq(QM.textDir(""), "ltr", "dir: empty text is ltr")
+    eq(QM.textDir(nil), "ltr", "dir: nil is ltr")
+    eq(QM.textDir("123 ... !?"), "ltr", "dir: no strong letter at all is ltr")
+    local t3 = {
+        settings = mq.settings,
+        surahName = tq.surahName,
+        _textModule = function() return {
+            ensureDb = function() return {} end,
+            enabledTranslations = function() return {
+                { name = "Sahih International", text = "First text." },
+                -- Dari 1:2 opening words, with a zero-width non-joiner
+                { name = "\216\175\216\177\219\140",
+                  text = "\216\170\217\133\216\167\217\133\219\140 \216\179\217\190\216\167\216\179 \217\136 \216\179\216\170\216\167\219\140\216\180\226\128\140\217\135\216\167" },
+            } end,
+        } end,
+    }
+    local html3 = QM.contentHtml(t3, "translation", 1, 2)
+    eq(html3:find('<div><i>Sahih International</i></div><div>First text.</div>', 1, true) ~= nil,
+        true, "dir: an LTR translation block is byte-identical to before")
+    eq(html3:find('<div style="margin-top: 0.4em" dir="rtl"><i>', 1, true) ~= nil, true,
+        "dir: an RTL edition name carries dir=rtl")
+    eq(select(2, html3:gsub('<div dir="rtl">', "")), 1,
+        "dir: exactly the RTL text block carries dir=rtl")
 end
 
 -- quran_browser: item construction + navigation (Menu/Screen stubbed)
@@ -1671,6 +1859,40 @@ do
     -- not installed (Get books, no ✓ dir): Download/Close only
     QAS.showBookDialog(fake, vA, nil)
     eq(btexts(), "Download|Close", "bookdlg: uninstalled book = Download/Close")
+    -- 2026-11-10: the Download row's callback must RUN. It indexed an
+    -- undefined global `lfs` (declared only inside an elseif above) and
+    -- crashed on tap. The file-exists branch is driven here: it reaches
+    -- the lfs call and stops at the confirm box, before any download.
+    do
+        local UIM = require("ui/uimanager")
+        local saved_show, shown = UIM.show, nil
+        UIM.show = function(_, w) shown = w end
+        local saved_fs = fake_fs
+        fake.quran._booksFolder = function() return "/qbooks" end
+        fake_fs = { ["/qbooks/a.epub"] = "file" }
+        local dl
+        for _i, row in ipairs(dlg.buttons) do
+            if row[1].text == "Download" then dl = row[1].callback end
+        end
+        local ok_dl, err_dl = pcall(dl)
+        eq(ok_dl, true, "bookdlg: Download callback runs without error ("
+            .. tostring(err_dl) .. ")")
+        eq(shown and shown.ok_text, "Overwrite",
+            "bookdlg: Download over an existing file asks first")
+        -- the same row from My books ("Download again") shares the code
+        shown = nil
+        QAS.showBookDialog(fake, vA, { rec = recA })
+        for _i, row in ipairs(dlg.buttons) do
+            if row[1].text == "Download again" then dl = row[1].callback end
+        end
+        ok_dl, err_dl = pcall(dl)
+        eq(ok_dl, true, "bookdlg: Download again callback runs without error ("
+            .. tostring(err_dl) .. ")")
+        eq(shown and shown.ok_text, "Overwrite",
+            "bookdlg: Download again over an existing file asks first")
+        UIM.show, fake_fs = saved_show, saved_fs
+        fake.quran._booksFolder = nil
+    end
     package.preload["ui/widget/buttondialog"] = prev_bd
     package.loaded["ui/widget/buttondialog"] = nil
     QAS.bookInventory, QAS._catalog, QAS._content_updates =
@@ -6711,6 +6933,133 @@ do
         "goto: surah center value is tappable")
     eq(gsrc:find("function GotoDialog:promptSurah()", 1, true) ~= nil, true,
         "goto: surah tap opens the number prompt")
+
+    -- 2026-11-10: swipes spin a column instead of dragging the box
+    eq(gsrc:find("unmovable = true", 1, true) ~= nil, true,
+        "goto-swipe: the dialog can no longer be dragged")
+    eq(gsrc:find('ges = "swipe"', 1, true) ~= nil, true,
+        "goto-swipe: the dialog listens for swipes")
+    eq(gsrc:find("function GotoDialog:onSwipe(", 1, true) ~= nil, true,
+        "goto-swipe: swipe handler present")
+    -- the pure helpers, extracted live by their markers
+    local sw_a = gsrc:find("-- [goto-swipe]", 1, true)
+    local sw_b = gsrc:find("-- [/goto-swipe]", 1, true)
+    eq(sw_a ~= nil and sw_b ~= nil and sw_a < sw_b, true,
+        "goto-swipe: helper block markers present")
+    local SW = assert(loadstring(gsrc:sub(sw_a, sw_b - 1)
+        .. "\nreturn { step = swipeStep, clamp = stepClamped, target = swipeTarget }\n"))()
+    -- swipe length -> step (screen 1000 px tall)
+    eq(SW.step(60, 1000), 1, "goto-swipe: a flick steps 1")
+    eq(SW.step(199, 1000), 1, "goto-swipe: just under the medium mark steps 1")
+    eq(SW.step(200, 1000), 10, "goto-swipe: a medium swipe steps 10")
+    eq(SW.step(449, 1000), 10, "goto-swipe: just under the long mark steps 10")
+    eq(SW.step(450, 1000), 50, "goto-swipe: a long swipe steps 50")
+    eq(SW.step(nil, 1000), 1, "goto-swipe: no distance steps 1")
+    eq(SW.step(500, 0), 50, "goto-swipe: a zero screen height cannot divide by zero")
+    -- stepping inside 1..max
+    eq(SW.clamp(5, 1, 10), 6, "goto-swipe: plain step forward")
+    eq(SW.clamp(5, -1, 10), 4, "goto-swipe: plain step back")
+    eq(SW.clamp(5, 50, 286), 55, "goto-swipe: a long step inside the range")
+    eq(SW.clamp(280, 50, 286), 286, "goto-swipe: an overshoot stops at the last ayah")
+    eq(SW.clamp(286, 1, 286), 1, "goto-swipe: a step at the end loops to the start")
+    eq(SW.clamp(286, 50, 286), 1, "goto-swipe: a long step at the end loops to the start")
+    eq(SW.clamp(3, -10, 286), 1, "goto-swipe: a back overshoot stops at 1")
+    eq(SW.clamp(1, -1, 286), 286, "goto-swipe: a back step at 1 loops to the end")
+    eq(SW.clamp(1, -50, 7), 7, "goto-swipe: a long back step at 1 loops in a short surah")
+    eq(SW.clamp(4, 10, 7), 7, "goto-swipe: a short surah clamps to its last ayah")
+    eq(SW.clamp(1, 1, 1), 1, "goto-swipe: a one-value range stays put")
+    eq(SW.clamp(nil, 1, 10), 2, "goto-swipe: a missing current value counts as 1")
+    eq(SW.clamp(5, 1, 0), 1, "goto-swipe: an empty range gives 1")
+    -- column pick and target, with fake pickers. Dialog at x 100..900,
+    -- y 300..700; surah picker centred at x 350, ayah picker at x 750.
+    local function fakeDlg(surah, ayah, max)
+        local labels = {}
+        for i = 1, 114 do labels[i] = tostring(i) end
+        return {
+            screen_height = 1000, labels = labels,
+            widget_frame = { dimen = { x = 100, y = 300, w = 800, h = 400 } },
+            surah_widget = { dimen = { x = 200, y = 350, w = 300, h = 300 },
+                getValue = function() return labels[surah], surah end },
+            ayah_widget = { dimen = { x = 650, y = 350, w = 200, h = 300 },
+                value_max = max, getValue = function() return ayah end },
+        }
+    end
+    local function sg(x, y, dir, dist)
+        return { pos = { x = x, y = y }, direction = dir, distance = dist }
+    end
+    local col, to = SW.target(fakeDlg(2, 100, 286), sg(360, 500, "north", 80))
+    eq(col, "surah", "goto-swipe: a swipe over the surah picker spins the surah")
+    eq(to, 3, "goto-swipe: swipe up = next surah")
+    col, to = SW.target(fakeDlg(2, 100, 286), sg(360, 500, "south", 80))
+    eq(to, 1, "goto-swipe: swipe down = previous surah")
+    col, to = SW.target(fakeDlg(2, 100, 286), sg(760, 500, "north", 300))
+    eq(col, "ayah", "goto-swipe: a swipe over the ayah picker spins the ayah")
+    eq(to, 110, "goto-swipe: a medium swipe up = 10 ayahs on")
+    col, to = SW.target(fakeDlg(2, 100, 286), sg(760, 500, "south", 600))
+    eq(to, 50, "goto-swipe: a long swipe down = 50 ayahs back")
+    col, to = SW.target(fakeDlg(2, 280, 286), sg(760, 500, "north", 600))
+    eq(to, 286, "goto-swipe: a long swipe near the end stops at the last ayah")
+    col, to = SW.target(fakeDlg(110, 1, 5), sg(360, 500, "north", 600))
+    eq(to, 114, "goto-swipe: a long surah swipe stops at surah 114")
+    -- the gap between the pickers goes to the nearer one
+    col = SW.target(fakeDlg(2, 100, 286), sg(540, 500, "north", 80))
+    eq(col, "surah", "goto-swipe: the gap left of the midpoint spins the surah")
+    col = SW.target(fakeDlg(2, 100, 286), sg(560, 500, "north", 80))
+    eq(col, "ayah", "goto-swipe: the gap right of the midpoint spins the ayah")
+    -- a mirrored interface puts the surah picker on the right: same rule
+    local mir = fakeDlg(2, 100, 286)
+    mir.surah_widget.dimen.x, mir.ayah_widget.dimen.x = 500, 150
+    col = SW.target(mir, sg(660, 500, "north", 80))
+    eq(col, "surah", "goto-swipe: mirrored layout, the right side spins the surah")
+    -- not ours
+    eq(SW.target(fakeDlg(2, 100, 286), sg(360, 500, "east", 300)), nil,
+        "goto-swipe: a sideways swipe spins nothing")
+    eq(SW.target(fakeDlg(2, 100, 286), sg(360, 500, "northeast", 300)), nil,
+        "goto-swipe: a diagonal swipe spins nothing")
+    eq(SW.target(fakeDlg(2, 100, 286), sg(360, 100, "north", 300)), nil,
+        "goto-swipe: a swipe that starts above the dialog spins nothing")
+    eq(SW.target(fakeDlg(2, 100, 286), sg(50, 500, "north", 300)), nil,
+        "goto-swipe: a swipe that starts left of the dialog spins nothing")
+    local unpainted = fakeDlg(2, 100, 286)
+    unpainted.widget_frame.dimen = nil
+    eq(SW.target(unpainted, sg(360, 500, "north", 80)), nil,
+        "goto-swipe: an unpainted dialog spins nothing")
+    eq(SW.target(fakeDlg(2, 100, 286), nil), nil,
+        "goto-swipe: a missing gesture spins nothing")
+
+    -- 2026-11-10: the prefill is converted to Hafs numbering. In a Warsh
+    -- book the position comes back Warsh-numbered while the dialog and
+    -- Go are Hafs-numbered, so Go without changes landed an ayah early.
+    do
+        local saved_find = QA.findAyahForPage
+        local saved_cls2 = QA._gotoDialogClass
+        local wspec
+        QA._gotoDialogClass = function()
+            return { new = function(_, sp) wspec = sp; return sp end }
+        end
+        QA.findAyahForPage = function() return 2, 100 end
+        q._is_quran_book = true
+        q.ui = { document = { getCurrentPage = function() return 12 end } }
+        -- warshalign.lua row for surah 2: Warsh 2:100 = Hafs 2:101
+        q._warshToHafs = function(_, sn, an)
+            return (sn == 2 and an >= 100) and an + 1 or an
+        end
+        QA.showGotoAyah(q)
+        eq(wspec.surah, 2, "goto-warsh: prefill keeps the surah")
+        eq(wspec.ayah, 101, "goto-warsh: a Warsh position prefills its Hafs number")
+        q._warshToHafs = function(_, _sn, an) return an end   -- Hafs book
+        QA.showGotoAyah(q)
+        eq(wspec.ayah, 100, "goto-warsh: a Hafs book prefills unchanged")
+        q._warshToHafs = nil
+        QA.showGotoAyah(q)
+        eq(wspec.ayah, 100, "goto-warsh: no converter (old install) prefills unchanged")
+        QA.findAyahForPage = function() return nil end
+        QA.showGotoAyah(q)
+        eq(wspec.surah, 1, "goto-warsh: an unknown position falls back to 1:1")
+        eq(wspec.ayah, 1, "goto-warsh: an unknown position falls back to ayah 1")
+        QA.findAyahForPage, QA._gotoDialogClass = saved_find, saved_cls2
+        q._is_quran_book, q.ui, q._goto_dialog = nil, nil, nil
+    end
 end
 
 -- D-R3-4: terminology unification — string-parity pin. ONE canonical
@@ -6883,10 +7232,27 @@ if book_f and cre_ok then
     pcall(cre.initHyphDict, APP .. "/data/hyph/")
     pcall(cre.registerFont, APP .. "/fonts/noto/NotoSans-Regular.ttf")
     pcall(cre.registerFont, APP .. "/fonts/noto/NotoNaskhArabic-Regular.ttf")
+    -- Run the whole leg under BOTH xpointer serializations: the legacy
+    -- DOM version (books first opened before crengine 137cba4a keep it in
+    -- their sidecar) and the engine's latest (every never-opened book on a
+    -- KOReader carrying 137cba4a, i.e. nightlies since 2026-08-14).
+    local LATEST = cre.getLatestDomVersion and cre.getLatestDomVersion() or 20240114
+    local DOMS = { 20240114 }
+    if LATEST > 20240114 then DOMS[#DOMS + 1] = LATEST end
+    for _, DOMV in ipairs(DOMS) do
     local doc = cre.newDocView(600, 800, 0)
+    doc:setIntProperty("crengine.render.requested_dom_version", DOMV)
     assert(doc:loadDocument(CRE_BOOK), "cre: loadDocument failed")
     doc:renderDocument()
-    eq(QA.fragPrefix(doc:getXPointer()) ~= nil, true, "cre: view xpointer carries a fragment")
+    local vxp = doc:getXPointer()
+    eq(QA.fragPrefix(vxp) ~= nil, true, "cre[" .. DOMV .. "]: view xpointer carries a fragment (" .. vxp .. ")")
+    if DOMV >= 20260812 then
+        eq(vxp:match("^/body%[1%]/DocFragment%[%d+%]/body%[1%]/") ~= nil, true,
+            "cre[" .. DOMV .. "]: explicit-[1] xpointer shape (crengine 137cba4a)")
+    else
+        eq(vxp:match("^/body/DocFragment%[%d+%]/body/") ~= nil, true,
+            "cre[" .. DOMV .. "]: legacy xpointer shape")
+    end
     local cq = {
         ui = { document = doc },
         bookAyahCount = function(_, ss) return ss == 77 and 50 or nil end,
@@ -6899,14 +7265,49 @@ if book_f and cre_ok then
     doc:gotoPage(p33)
     local ds, da = QA.findAyahForPage(cq, doc:getCurrentPage())
     eq(ds, 77, "cre: detection surah")
-    eq(da ~= nil and da >= 28 and da <= 36, true,
-        "cre: detected ayah near the viewed page (" .. tostring(da) .. "), not 1/50/nil")
+    -- EXACT, against geometry (never the plugin's own patterns): the top
+    -- ayah of a start-anchored book = the last ayah block whose top is
+    -- at or above the view-top position
+    local gprefix = QA.fragPrefix(doc:getXPointer())
+    local function geomTop()
+        local yc = doc:getPosFromXPointer(doc:getXPointer())
+        local t = 1
+        for a2 = 1, 50 do
+            local ya = doc:getPosFromXPointer("#" .. gprefix .. "ayah-77-" .. a2)
+            if ya and ya > 0 and ya <= yc then t = a2 else break end
+        end
+        return t
+    end
+    eq(da, geomTop(), "cre[" .. DOMV .. "]: detected ayah is EXACT on the jumped page")
     -- the containment path must fire on this layout (view-top block is
     -- an ayah paragraph carrying id= or ayah-ref)
     local okh, html = pcall(doc.getHTMLFromXPointer, doc, doc:getXPointer(), 0, true)
     local ch = okh and html and
-        (html:match('id="ayah%-%d+%-%d+"') or html:match('class="ayah%-ref">%d+:%d+<'))
+        (QA.blockAyahId(html) or html:match('class="ayah%-ref">%d+:%d+<'))
     eq(ch ~= nil, true, "cre: containment marker present on the view-top block")
+    -- every page of the surah: exact top ayah + range end (the plugin's
+    -- own definition: the last ayah whose anchor sits on this page)
+    do
+        local pend = QA.resolveAnchorPage(cq, 77, 50)
+        local pages, bad_first, bad_last = 0, 0, 0
+        for pg = p77 + 1, pend do
+            doc:gotoPage(pg)
+            local truth = geomTop()
+            local _s2, got = QA.findAyahForPage(cq, doc:getCurrentPage())
+            local _r, rf, rl = QA.visibleAyahRange(cq)
+            local tlast = truth
+            for a2 = truth + 1, 50 do
+                if doc:getPageFromXPointer("#" .. gprefix .. "ayah-77-" .. a2) == pg then tlast = a2 end
+            end
+            pages = pages + 1
+            if got ~= truth or rf ~= truth then bad_first = bad_first + 1 end
+            if rl ~= tlast then bad_last = bad_last + 1 end
+        end
+        eq(pages > 0, true, "cre[" .. DOMV .. "]: surah 77 page sweep ran (" .. pages .. " pages)")
+        eq(bad_first, 0, "cre[" .. DOMV .. "]: top ayah exact on every page of 77")
+        eq(bad_last, 0, "cre[" .. DOMV .. "]: range end exact on every page of 77")
+        doc:gotoPage(p33)
+    end
     -- anchor convention: this ayah-inline book puts the id on the ayah's
     -- own <p> (probed 2026-07-12) — jumps must resolve anchor A itself
     eq(QA.anchorConvention(cq), "start", "cre: ayah-inline book is start-anchored")
@@ -6958,6 +7359,50 @@ if book_f and cre_ok then
     eq(doc:compareXPointers(sign_b, sign_a), -1,
         "cre: compareXPointers sign — later first arg = -1")
     doc:close()
+    end -- for DOMS
+    -- flow layout (end-anchored), when the eyeball cell exists: the
+    -- convention probe must say "end" (inline-block end markers fooled
+    -- it before 2026-10-01) and detection must stay exact
+    local FLOW_BOOK = DATA_ROOT .. "/output/eyeball/quran_hafs-uthmani_kfgqpc_flow_ar.epub"
+    local ff = io.open(FLOW_BOOK)
+    if ff then
+        ff:close()
+        for _, DOMV in ipairs(DOMS) do
+            local fdoc = cre.newDocView(600, 800, 0)
+            fdoc:setIntProperty("crengine.render.requested_dom_version", DOMV)
+            assert(fdoc:loadDocument(FLOW_BOOK), "cre: flow loadDocument failed")
+            fdoc:renderDocument()
+            local fq = {
+                ui = { document = fdoc },
+                bookAyahCount = function(_, ss) return ss == 18 and 110 or nil end,
+                _findSurahForPage = function(_, _) return 18 end,
+            }
+            local f18 = QA.resolveAnchorPage(fq, 18, nil)
+            fdoc:gotoPage(f18 + 1)
+            eq(QA.anchorConvention(fq), "end", "cre-flow[" .. DOMV .. "]: flow book is end-anchored")
+            local fprefix = QA.fragPrefix(fdoc:getXPointer())
+            local fend = QA.resolveAnchorPage(fq, 18, 110)
+            local bad, pages = 0, 0
+            for pg = f18 + 1, fend do
+                fdoc:gotoPage(pg)
+                local truth = 110
+                for a2 = 1, 110 do
+                    if fdoc:getPageFromXPointer("#" .. fprefix .. "ayah-18-" .. a2) >= pg then
+                        truth = a2
+                        break
+                    end
+                end
+                local _s3, got = QA.findAyahForPage(fq, fdoc:getCurrentPage())
+                pages = pages + 1
+                if got ~= truth then bad = bad + 1 end
+            end
+            eq(pages > 0 and bad == 0, true,
+                "cre-flow[" .. DOMV .. "]: top ayah exact on every page of 18 (" .. bad .. "/" .. pages .. " off)")
+            fdoc:close()
+        end
+    else
+        print("skip cre flow-layout checks (output/eyeball flow cell unavailable)")
+    end
 else
     print("skip cre integration tests (app bundle or built EPUB unavailable)")
 end
@@ -7198,6 +7643,50 @@ do
         "nd26-pin: override setting key (default defer)")
     eq(msrc:find('text = _("Override built-in tap popups")', 1, true)
         ~= nil, true, "nd26-pin: override row in Settings")
+end
+
+-- 2026-11-10: book detection refuses paged documents. A contributed
+-- mushaf PDF carries "Quran" in its keywords; the plugin cannot drive a
+-- PDF (xpointer helpers only), so it must not claim one. Extracted live.
+do
+    local dchunk = "local logger = { dbg = function() end, info = function() end }\n"
+        .. "local Quran = {}\n"
+        .. extract("--- Detect whether the current book is a quran-ebook EPUB",
+                   "--- Warsh->Hafs alignment map")
+        .. "\nreturn Quran\n"
+    local DET = assert(loadstring(dchunk))()
+    local function dinst(props, has_pages, juz)
+        return {
+            ui = { doc_props = props,
+                   document = { info = { has_pages = has_pages } } },
+            _getJuzTocPages = function() return juz end,
+            _detectQuranBook = DET._detectQuranBook,
+        }
+    end
+    local d1 = dinst({ keywords = "Quran" }, false)
+    eq(d1:_detectQuranBook(), true, "detect: our EPUB is recognised by its subject")
+    eq(d1._riwayah, "hafs", "detect: riwayah defaults to hafs")
+    local d2 = dinst({ keywords = "Quran",
+        description = "Riwayat Warsh 'an Nafi'" }, false)
+    eq(d2:_detectQuranBook(), true, "detect: a Warsh EPUB is recognised")
+    eq(d2._riwayah, "warsh", "detect: Warsh read from the description")
+    local d3 = dinst({ keywords = "Quran; Original layout; Vector PDF" }, true)
+    eq(d3:_detectQuranBook(), false,
+        "detect: a PDF with Quran keywords is refused")
+    eq(d3._riwayah, nil, "detect: a refused PDF sets no riwayah")
+    local d4 = dinst({}, true, { 1, 22 })
+    eq(d4:_detectQuranBook(), false,
+        "detect: a paged document is refused even when juz entries exist")
+    local d5 = dinst({}, false, { 1, 22 })
+    eq(d5:_detectQuranBook(), true,
+        "detect: the juz-TOC fallback still works for reflowable books")
+    local d6 = dinst({ keywords = "Novel" }, false)
+    eq(d6:_detectQuranBook(), false, "detect: an unrelated EPUB is not claimed")
+    local d7 = { ui = { doc_props = { keywords = "Quran" } },
+                 _getJuzTocPages = function() end,
+                 _detectQuranBook = DET._detectQuranBook }
+    eq(d7:_detectQuranBook(), true,
+        "detect: a missing document object does not break detection")
 end
 
 print("ALL HELPER TESTS PASS")

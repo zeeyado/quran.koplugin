@@ -92,6 +92,84 @@ local function esc(s)
     return (s:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"))
 end
 
+--- Direction of a piece of text by its first strong letter (the Unicode
+-- "first strong" rule, cut down to what the translation packages hold):
+-- "rtl" when that letter is Hebrew, Arabic, Syriac, Thaana, N'Ko or
+-- another right-to-left script, else "ltr". Spaces, digits and
+-- punctuation are skipped.
+-- Why: MuPDF (the popup's engine) lays an RTL paragraph out wrong unless
+-- its block says dir="rtl": left-aligned, end punctuation on the wrong
+-- side, and the word after a zero-width non-joiner jumps to the far end
+-- (most ayahs of the Persian, Dari and Kurdish editions). MuPDF has no
+-- dir="auto", and the packages carry no direction field yet.
+function M.textDir(s)
+    if type(s) ~= "string" then return "ltr" end
+    local i, n = 1, #s
+    while i <= n do
+        local b = s:byte(i)
+        if b < 0x80 then
+            -- ASCII: a letter decides, everything else is neutral
+            if (b >= 0x41 and b <= 0x5A) or (b >= 0x61 and b <= 0x7A) then
+                return "ltr"
+            end
+            i = i + 1
+        elseif b < 0xC0 then
+            i = i + 1                      -- stray continuation byte
+        elseif b < 0xE0 then
+            -- U+0080..U+07FF
+            local cp = (b % 0x20) * 0x40 + ((s:byte(i + 1) or 0x80) % 0x40)
+            if cp >= 0x0590 then return "rtl" end   -- Hebrew .. N'Ko
+            -- letters from U+00C0 up (Latin, Greek, Cyrillic, Armenian);
+            -- the multiplication and division signs and the combining
+            -- marks are neutral
+            if cp >= 0x00C0 and cp ~= 0x00D7 and cp ~= 0x00F7
+                and not (cp >= 0x0300 and cp <= 0x036F) then
+                return "ltr"
+            end
+            i = i + 2
+        elseif b < 0xF0 then
+            -- U+0800..U+FFFF
+            local cp = (b % 0x10) * 0x1000
+                + ((s:byte(i + 1) or 0x80) % 0x40) * 0x40
+                + ((s:byte(i + 2) or 0x80) % 0x40)
+            if cp == 0x200F then return "rtl" end   -- right-to-left mark
+            if cp == 0x200E then return "ltr" end   -- left-to-right mark
+            if cp == 0xFD3E or cp == 0xFD3F or cp == 0xFEFF then
+                i = i + 3                  -- ornate parentheses, BOM: neutral
+            elseif (cp >= 0x0800 and cp <= 0x08FF)      -- Samaritan .. Arabic Extended-A
+                or (cp >= 0xFB1D and cp <= 0xFDFF)      -- Hebrew, Arabic presentation forms
+                or (cp >= 0xFE70 and cp <= 0xFEFC) then -- Arabic presentation forms B
+                return "rtl"
+            elseif (cp >= 0x2000 and cp <= 0x2BFF)      -- punctuation and symbols
+                or (cp >= 0x3000 and cp <= 0x303F)      -- CJK punctuation
+                or (cp >= 0xFE10 and cp <= 0xFE6F)      -- vertical and small forms
+                or (cp >= 0xFF00 and cp <= 0xFF20) then -- fullwidth punctuation and digits
+                i = i + 3
+            else
+                return "ltr"
+            end
+        else
+            -- U+10000 and up: two ranges are set aside for RTL scripts
+            local cp = (b % 0x08) * 0x40000
+                + ((s:byte(i + 1) or 0x80) % 0x40) * 0x1000
+                + ((s:byte(i + 2) or 0x80) % 0x40) * 0x40
+                + ((s:byte(i + 3) or 0x80) % 0x40)
+            if (cp >= 0x10800 and cp <= 0x10FFF)
+                or (cp >= 0x1E800 and cp <= 0x1EFFF) then
+                return "rtl"
+            end
+            return "ltr"
+        end
+    end
+    return "ltr"
+end
+
+-- ' dir="rtl"' for right-to-left text, "" otherwise (an absent dir is
+-- what every LTR block had before, so nothing changes for those).
+local function dirAttr(s)
+    return M.textDir(s) == "rtl" and ' dir="rtl"' or ""
+end
+
 --- The popup HTML for a content layer; nil = nothing available (the
 -- caller shows the honest notification). surah/hafs are Hafs-numbered
 -- (data keys, design invariant D8).
@@ -112,11 +190,14 @@ function M.contentHtml(quran, mode, surah, hafs)
         local ts = qt.enabledTranslations(quran, conn, surah, hafs)
         if not ts or #ts == 0 then return end
         local parts = { "<div>", head }
+        -- each block gets its own direction: an Urdu or Persian edition
+        -- next to an English one must not drag the other along
         for i, t in ipairs(ts) do
             parts[#parts + 1] = string.format(
-                '<div%s><i>%s</i></div><div>%s</div>',
+                '<div%s%s><i>%s</i></div><div%s>%s</div>',
                 i > 1 and ' style="margin-top: 0.4em"' or "",
-                esc(t.name), esc(t.text))
+                dirAttr(t.name), esc(t.name),
+                dirAttr(t.text), esc(t.text))
         end
         parts[#parts + 1] = "</div>"
         return table.concat(parts)

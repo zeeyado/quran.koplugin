@@ -116,10 +116,39 @@ end
 -- compareXPointers as nil). The prefix for the CURRENTLY VIEWED
 -- fragment falls out of the view-top xpointer:
 -- "/body/DocFragment[79]/…" → "_doc_fragment_78_ ".
+-- BOTH serialization shapes: crengine 137cba4a (DOM version 20260812,
+-- KOReader nightlies since 2026-08-14) writes an explicit [1] on every
+-- first sibling ("/body[1]/DocFragment[79]/body[1]/…"); books whose
+-- sidecar pins an older cre_dom_version keep "/body/DocFragment[79]/…".
+-- Never compare xpointer STRINGS anywhere else: hand them back to the
+-- engine, which parses both shapes.
+function M.fragIndex(xp)
+    if type(xp) ~= "string" then return nil end
+    local f = xp:match("^/body/DocFragment%[(%d+)%]")
+        or xp:match("^/body%[1%]/DocFragment%[(%d+)%]")
+    return f and tonumber(f) or nil
+end
+
 function M.fragPrefix(xp)
-    local f = xp and xp:match("^/body/DocFragment%[(%d+)%]")
+    local f = M.fragIndex(xp)
     if f then
-        return "_doc_fragment_" .. (tonumber(f) - 1) .. "_ "
+        return "_doc_fragment_" .. (f - 1) .. "_ "
+    end
+end
+
+-- The ayah id on the OPENING TAG of a serialized block, when that tag is
+-- a block element. Serialized ids keep crengine's rename
+-- (id="_doc_fragment_78_ ayah-77-30"), so the value is suffix-matched;
+-- inline elements are rejected because the flow layouts' end marker
+-- (<span class="ayah-number" id=…>, display:inline-block) is its OWN
+-- final node, so getHTMLFromXPointer(…, true) returns it with the id on
+-- its opening tag although it marks an ayah END, not an ayah block.
+local INLINE_TAGS = { span = true, a = true }
+function M.blockAyahId(html)
+    if type(html) ~= "string" then return nil end
+    local tag, s, a = html:match('^%s*<(%w+)[^>]-id="[^"]-ayah%-(%d+)%-(%d+)"')
+    if tag and not INLINE_TAGS[tag:lower()] then
+        return tonumber(s), tonumber(a)
     end
 end
 
@@ -176,9 +205,12 @@ end
 -- report the surah's LAST ayah near the end of the book — cannot distort
 -- it, and it is strictly monotone in ayah number, so binary search is
 -- sound (~9 comparisons for Al-Baqarah). The anchor id sits either on
--- the ayah's own opening block (ayah layouts) or on its inline end
--- marker (flow layouts — see M.anchorConvention); under BOTH conventions
--- the first anchor at-or-after the view top is the ayah visible there.
+-- the ayah's own opening block (ayah/word layouts, convention "start")
+-- or on its inline end marker (flow layouts, "end"; M.anchorConvention).
+-- "end": the first anchor at-or-after the view top is the ayah visible
+-- there. "start": the LAST anchor at-or-before the view top is (the view
+-- top is a node INSIDE the ayah's block, which compares after the
+-- block's own anchor; first-at-or-after lands one ayah late).
 function M.findAyahForPage(quran, pageno)
     if not quran.ui or not quran.ui.document then return nil end
     local doc = quran.ui.document
@@ -206,7 +238,7 @@ function M.findAyahForPage(quran, pageno)
                 local okh, html = pcall(doc.getHTMLFromXPointer, doc,
                     cur, 0, true)
                 if okh and html then
-                    local hs, ha = html:match('id="ayah%-(%d+)%-(%d+)"')
+                    local hs, ha = M.blockAyahId(html)
                     if not hs then
                         hs, ha = html:match('class="ayah%-ref">(%d+):(%d+)<')
                     end
@@ -232,19 +264,32 @@ function M.findAyahForPage(quran, pageno)
                 if c1 ~= 1 then
                     return surah, 1  -- view top at/before the first anchor
                 end
-                if clast == 1 then
+                local start_conv = M.anchorConvention(quran) == "start"
+                if clast == 1 or (start_conv and clast == 0) then
                     -- Even the LAST anchor compares before the view top:
                     -- past the surah's final ayah (its end matter) — the
                     -- last ayah is what's on screen.
                     return surah, count
                 end
                 local lo, hi, best = 2, count, count
+                if start_conv then
+                    -- last anchor at-or-before the view top (anchor 1 is
+                    -- known to be before it)
+                    best = 1
+                end
                 while lo <= hi do
                     local mid = math.floor((lo + hi) / 2)
                     local c = doc:compareXPointers(anchorXP(surah, mid, prefix), cur)
                     if c == nil then
                         best = nil  -- invalid mid anchor: use the fallback
                         break
+                    elseif start_conv then
+                        if c >= 0 then
+                            best = mid     -- anchor at/before view top
+                            lo = mid + 1
+                        else
+                            hi = mid - 1
+                        end
                     elseif c == 1 then
                         lo = mid + 1   -- anchor strictly before view top
                     else
@@ -296,11 +341,11 @@ function M.resolveAnchorRef(quran, surah, ayah)
         table.insert(offsets, quran._frag_offset)
     end
     local ok, cur = pcall(doc.getXPointer, doc)
-    local f = ok and cur and cur:match("^/body/DocFragment%[(%d+)%]")
+    local f = ok and M.fragIndex(cur)
     if f and doc.getCurrentPage and quran._findSurahForPage then
         local cur_surah = quran:_findSurahForPage(doc:getCurrentPage())
         if cur_surah then
-            table.insert(offsets, tonumber(f) - cur_surah)
+            table.insert(offsets, f - cur_surah)
         end
     end
     for off = 0, 8 do
@@ -333,7 +378,9 @@ end
 --             paragraph (flow layouts) → the start of A is the END of
 --             A−1, so jumps resolve anchor A−1 (the historical rule).
 -- Probe: serialize the anchor's containing block; when the block's
--- opening tag carries the anchor id, the anchor opens its ayah.
+-- opening tag carries the anchor id AND is a block element, the anchor
+-- opens its ayah. (Flow end markers are inline-block spans, their own
+-- final node: the id is on the opening tag there too, so the tag decides.)
 function M.anchorConvention(quran)
     if quran._anchor_conv then return quran._anchor_conv end
     local doc = quran.ui and quran.ui.document
@@ -343,8 +390,8 @@ function M.anchorConvention(quran)
         if ref then
             local okh, html = pcall(doc.getHTMLFromXPointer, doc, ref, 0, true)
             if okh and html and html ~= "" then
-                local id_pat = string.format('ayah%%-%d%%-%d"', probe[1], probe[2])
-                local conv = html:match('^%s*<%w+[^>]-id="[^"]*' .. id_pat)
+                local bs, ba = M.blockAyahId(html)
+                local conv = (bs == probe[1] and ba == probe[2])
                     and "start" or "end"
                 quran._anchor_conv = conv
                 logger.info("quran.koplugin: anchor convention", conv)
@@ -392,7 +439,19 @@ function M.visibleAyahRange(quran)
                 if cmp <= 0 then break end  -- anchor at/after next page start
                 last = a
             end
-            if dom_ok then return surah, first, last end
+            if dom_ok then
+                if last > first and M.anchorConvention(quran) == "start" then
+                    -- start-anchored: the last candidate can be the block
+                    -- that OPENS the next page (its element compares
+                    -- before that page's first text node). Page numbers
+                    -- only ever EXCLUDE here, so the lazy-pagination
+                    -- clamp cannot widen the range.
+                    local okp, pl = pcall(doc.getPageFromXPointer, doc,
+                        anchorXP(surah, last, prefix))
+                    if okp and pl and pl > pageno then last = last - 1 end
+                end
+                return surah, first, last
+            end
             last = first
         end
     end
@@ -466,10 +525,15 @@ function M.showGotoAyah(quran)
     if not counts then return end
     local s, a
     if quran._is_quran_book then
-        -- Prefill = the first visible ayah (book axis; ≈Hafs — a Warsh
-        -- divergent surah prefills the book number, the go-to itself
-        -- stays Hafs-correct).
+        -- Prefill = the first visible ayah, converted to Hafs numbering.
+        -- The dialog and its Go are Hafs-numbered (D8); the position
+        -- comes back in the BOOK's numbering. Unconverted, a Warsh book
+        -- opened the dialog on its own number and Go read it as Hafs,
+        -- landing an ayah early in the surahs where the two differ.
         s, a = currentPosition(quran)
+        if s and a and quran._warshToHafs then
+            a = quran:_warshToHafs(s, a)
+        end
     end
     local Dlg = M._gotoDialogClass(quran)
     if not Dlg then return end

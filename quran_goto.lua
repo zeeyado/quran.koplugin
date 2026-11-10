@@ -8,6 +8,12 @@ column: the surah picker spins over label strings ("36 · Ya-Sin"), and the
 ayah picker's max must re-clamp to the selected surah's count on every
 surah change (the date-widget precedent). Ayah numbering is Hafs-canonical
 (design invariant D8) — the go-to seam converts for Warsh books.
+
+2026-11-10: a swipe up or down on a column now spins it (a flick = 1, a
+medium swipe = 10, a long swipe = 50; up = onward, like the ▼ button).
+Before, the dialog sat in a draggable container, so the swipe a reader
+tries first dragged the whole box across the screen. The container is
+kept (same layout) but made unmovable.
 GPL-3.0.
 ]]
 
@@ -31,6 +37,64 @@ local VerticalGroup = require("ui/widget/verticalgroup")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local _ = require("gettext")
 local Screen = Device.screen
+
+-- [goto-swipe] pure swipe helpers; the harness extracts this block by its
+-- markers and runs it without any widget, so keep it free of upvalues.
+
+-- Swipe length as a share of the screen height -> step size. Tune here.
+local SWIPE_MEDIUM = 0.20   -- from this share up: 10
+local SWIPE_LONG = 0.45     -- from this share up: 50
+
+local function swipeStep(distance, screen_h)
+    local share = (distance or 0) / math.max(1, screen_h or 1)
+    if share >= SWIPE_LONG then return 50 end
+    if share >= SWIPE_MEDIUM then return 10 end
+    return 1
+end
+
+-- Move cur by delta inside 1..max. A step that would overshoot stops at
+-- the end; a step taken while already AT an end loops to the other one
+-- (the same loop a single tap makes).
+local function stepClamped(cur, delta, max)
+    if not max or max < 1 then return 1 end
+    cur = cur or 1
+    local to = cur + delta
+    if to > max then
+        return cur >= max and 1 or max
+    elseif to < 1 then
+        return cur <= 1 and max or 1
+    end
+    return to
+end
+
+-- Which column a swipe spins and where it lands: "surah"|"ayah", target.
+-- nil = not ours (sideways or diagonal, or it started off the dialog).
+-- The column is the one whose centre is nearest to where the finger
+-- went down, so the gaps between the pickers count too and a mirrored
+-- (right-to-left) interface needs no special case.
+local function swipeTarget(self, ges)
+    local dir = ges and ges.direction
+    if dir ~= "north" and dir ~= "south" then return nil end
+    local frame = self.widget_frame and self.widget_frame.dimen
+    local pos = ges.pos
+    if not (frame and pos) then return nil end
+    if pos.x < frame.x or pos.x >= frame.x + frame.w
+        or pos.y < frame.y or pos.y >= frame.y + frame.h then
+        return nil
+    end
+    local sw, aw = self.surah_widget, self.ayah_widget
+    if not (sw and aw and sw.dimen and aw.dimen) then return nil end
+    local step = swipeStep(ges.distance, self.screen_height)
+    local delta = dir == "north" and step or -step   -- up = onward
+    local d_surah = math.abs(pos.x - (sw.dimen.x + sw.dimen.w / 2))
+    local d_ayah = math.abs(pos.x - (aw.dimen.x + aw.dimen.w / 2))
+    if d_surah <= d_ayah then
+        local cur = select(2, sw:getValue())   -- value, index
+        return "surah", stepClamped(cur, delta, #self.labels)
+    end
+    return "ayah", stepClamped(aw:getValue(), delta, aw.value_max)
+end
+-- [/goto-swipe]
 
 local GotoDialog = FocusManager:extend{
     title_text = "",
@@ -60,6 +124,12 @@ function GotoDialog:init()
         self.ges_events.TapClose = {
             GestureRange:new{
                 ges = "tap",
+                range = Geom:new{ w = self.screen_width, h = self.screen_height },
+            },
+        }
+        self.ges_events.Swipe = {
+            GestureRange:new{
+                ges = "swipe",
                 range = Geom:new{ w = self.screen_width, h = self.screen_height },
             },
         }
@@ -281,7 +351,10 @@ function GotoDialog:update(surah, ayah)
             },
         },
     }
+    -- unmovable: a swipe spins a column (onSwipe) instead of dragging
+    -- the box; the container stays so the layout is unchanged
     self.movable = MovableContainer:new{
+        unmovable = true,
         self.widget_frame,
     }
     self[1] = WidgetContainer:new{
@@ -345,6 +418,23 @@ function GotoDialog:onShow()
     UIManager:setDirty(self, function()
         return "ui", self.widget_frame.dimen
     end)
+    return true
+end
+
+--- A vertical swipe on a column spins it by the swipe's length. Every
+-- swipe on this dialog is consumed, so none reaches the page beneath.
+function GotoDialog:onSwipe(_arg, ges)
+    local column, to = swipeTarget(self, ges)
+    if column == "surah" then
+        local cur = select(2, self.surah_widget:getValue())
+        if to ~= cur then self:update(to, 1) end   -- a new surah starts at ayah 1
+    elseif column == "ayah" then
+        local aw = self.ayah_widget
+        if to ~= aw:getValue() then
+            aw.value = to
+            aw:update()   -- in place; also refreshes the neighbor preview
+        end
+    end
     return true
 end
 

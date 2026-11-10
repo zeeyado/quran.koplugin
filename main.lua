@@ -1639,6 +1639,16 @@ end
 -- dc:publisher for "quran-ebook".  This prevents the plugin from
 -- injecting juz/surah status into unrelated books.
 function Quran:_detectQuranBook()
+    -- Paged documents (PDF, DjVu, comics) are refused for now. Every
+    -- position helper in this plugin speaks crengine xpointers, so a PDF
+    -- cannot be driven even when its metadata says "Quran" (a contributed
+    -- mushaf PDF's keywords do, 2026-11). Claiming it would only add dead
+    -- status items and hooks. PDF support comes with a document adapter.
+    local doc = self.ui.document
+    if doc and doc.info and doc.info.has_pages then
+        logger.dbg("quran.koplugin: paged document, left alone")
+        return false
+    end
     -- Check doc_props (available after document load)
     local props = self.ui.doc_props
     if props then
