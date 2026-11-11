@@ -14,6 +14,11 @@ medium swipe = 10, a long swipe = 50; up = onward, like the ▼ button).
 Before, the dialog sat in a draggable container, so the swipe a reader
 tries first dragged the whole box across the screen. The container is
 kept (same layout) but made unmovable.
+
+2026-11-10 (later): a tap on the surah name opens the full surah list
+(owner: "a longer scrollable list" instead of typing a number). The
+type-a-number prompt of 2026-07-27 is gone; the ayah number still takes
+typed input, as every stock number picker does.
 GPL-3.0.
 ]]
 
@@ -95,6 +100,33 @@ local function swipeTarget(self, ges)
     return "ayah", stepClamped(aw:getValue(), delta, aw.value_max)
 end
 -- [/goto-swipe]
+
+-- [goto-list] the surah list's rows; pure, extracted by the harness.
+-- One row per surah: the picker's own label, the ayah count on the right.
+-- `current` is the surah the picker stands on; Menu draws that row bold.
+local function surahListItems(labels, counts, current)
+    local items = { current = current }
+    for s = 1, #(labels or {}) do
+        local n = counts and counts[s]
+        items[s] = {
+            text = labels[s],
+            mandatory = n and tostring(n) or nil,
+            surah = s,
+        }
+    end
+    return items
+end
+
+-- Rows per page. Stock Menu draws a fixed 14 and stretches them, so a
+-- tall phone screen gets huge rows; this gives it more rows instead
+-- (the browser's rule: about 48dp a row, 14 to 22). A user's own
+-- "items per page" setting wins.
+local function listRowsPerPage(user_setting, screen_h, row_h)
+    if user_setting then return user_setting end
+    return math.min(22, math.max(14,
+        math.floor((screen_h or 0) / math.max(1, row_h or 86))))
+end
+-- [/goto-list]
 
 local GotoDialog = FocusManager:extend{
     title_text = "",
@@ -254,9 +286,10 @@ function GotoDialog:update(surah, ayah)
     -- The surah VALUE is tappable like the ayah number (owner
     -- 2026-07-27): stock only wires center-tap input for numeric
     -- pickers (value_table columns get none), but the center Button
-    -- is exposed as text_value — hook it to a surah-number prompt.
+    -- is exposed as text_value. It opens the full surah list (owner
+    -- 2026-11-10; before, a type-the-number prompt).
     self.surah_widget.text_value.callback = function()
-        self:promptSurah()
+        self:showSurahList()
     end
 
     local text_max_width = math.floor(0.95 * self.width / 2)
@@ -375,40 +408,50 @@ function GotoDialog:update(surah, ayah)
     end)
 end
 
---- Center-tap on the surah column: type the surah number directly
--- (1-114, clamped); the ayah resets to 1 like any surah change.
-function GotoDialog:promptSurah()
-    local InputDialog = require("ui/widget/inputdialog")
-    local input
-    input = InputDialog:new{
-        title = _("Surah number (1-114)"),
-        input_type = "number",
-        buttons = { {
-            {
-                text = self.cancel_text,
-                id = "close",
-                callback = function() UIManager:close(input) end,
-            },
-            {
-                text = _("OK"),
-                is_enter_default = true,
-                callback = function()
-                    local n = tonumber(input:getInputText())
-                    UIManager:close(input)
-                    if n then
-                        n = math.floor(n)
-                        if n < 1 then n = 1 elseif n > 114 then n = 114 end
-                        self:update(n, 1)
-                    end
-                end,
-            },
-        } },
+--- Center-tap on the surah column: the full surah list. It opens on
+-- the page that holds the current surah (drawn bold); a tap picks one
+-- and the ayah resets to 1, like any surah change. Closing the list
+-- without picking leaves the dialog as it was.
+function GotoDialog:showSurahList()
+    local Menu = require("ui/widget/menu")
+    local cur = select(2, self.surah_widget:getValue())   -- value, index
+    local items = surahListItems(self.labels, self.counts, cur)
+    local reader_settings = rawget(_G, "G_reader_settings")   -- KOReader's global
+    local menu
+    menu = Menu:new{
+        title = self.surah_text,
+        item_table = items,
+        is_borderless = true,
+        is_popout = false,
+        covers_fullscreen = true,
+        width = self.screen_width,
+        height = self.screen_height,
+        single_line = true,
+        items_font_size = 18,
+        items_mandatory_font_size = 14,
+        items_per_page = listRowsPerPage(
+            reader_settings and reader_settings:readSetting("items_per_page"),
+            self.screen_height,
+            Screen.scaleBySize and Screen:scaleBySize(48)),
     }
-    UIManager:show(input)
-    input:onShowKeyboard()
+    menu.onMenuSelect = function(_menu, item)
+        UIManager:close(menu)
+        self.surah_list = nil
+        if item and item.surah then self:update(item.surah, 1) end
+        return true
+    end
+    menu.close_callback = function() self.surah_list = nil end
+    menu:switchItemTable(nil, items, cur)   -- turn to the current surah's page
+    self.surah_list = menu
+    UIManager:show(menu)
 end
 
 function GotoDialog:onCloseWidget()
+    -- a dialog torn down from outside (book closed) takes its list along
+    if self.surah_list then
+        UIManager:close(self.surah_list)
+        self.surah_list = nil
+    end
     UIManager:setDirty(nil, function()
         return "ui", self.widget_frame.dimen
     end)

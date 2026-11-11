@@ -6931,8 +6931,8 @@ do
         "goto: a new surah resets the ayah column to 1")
     eq(gsrc:find("text_value.callback", 1, true) ~= nil, true,
         "goto: surah center value is tappable")
-    eq(gsrc:find("function GotoDialog:promptSurah()", 1, true) ~= nil, true,
-        "goto: surah tap opens the number prompt")
+    -- (the 2026-07-27 number prompt became the surah list on 2026-11-10;
+    -- see the goto-list tests below)
 
     -- 2026-11-10: swipes spin a column instead of dragging the box
     eq(gsrc:find("unmovable = true", 1, true) ~= nil, true,
@@ -7059,6 +7059,107 @@ do
         eq(wspec.ayah, 1, "goto-warsh: an unknown position falls back to ayah 1")
         QA.findAyahForPage, QA._gotoDialogClass = saved_find, saved_cls2
         q._is_quran_book, q.ui, q._goto_dialog = nil, nil, nil
+    end
+
+    -- 2026-11-10: a tap on the surah name opens the full surah list (it
+    -- replaced the type-a-number prompt)
+    eq(gsrc:find("promptSurah", 1, true), nil,
+        "goto-list: the number prompt is gone")
+    local hook_i = gsrc:find("text_value.callback = function()", 1, true)
+    eq(hook_i ~= nil and gsrc:sub(hook_i, hook_i + 90)
+            :find("self:showSurahList()", 1, true) ~= nil, true,
+        "goto-list: the surah tap opens the list")
+    eq(gsrc:find("if self.surah_list then", 1, true) ~= nil, true,
+        "goto-list: a dialog closed from outside takes its list along")
+    local gl_a = gsrc:find("-- [goto-list]", 1, true)
+    local gl_b = gsrc:find("-- [/goto-list]", 1, true)
+    eq(gl_a ~= nil and gl_b ~= nil and gl_a < gl_b, true,
+        "goto-list: helper block markers present")
+    local GL = assert(loadstring(gsrc:sub(gl_a, gl_b - 1)
+        .. "\nreturn { items = surahListItems, rows = listRowsPerPage }\n"))()
+    local gl_labels, gl_counts = {}, {}
+    for i = 1, 114 do
+        gl_labels[i] = i .. " \194\183 Name" .. i
+        gl_counts[i] = i + 2
+    end
+    do
+        local rows = GL.items(gl_labels, gl_counts, 36)
+        eq(#rows, 114, "goto-list: one row per surah")
+        eq(rows.current, 36, "goto-list: the current surah is marked (drawn bold)")
+        eq(rows[36].text, gl_labels[36], "goto-list: a row shows the picker's own label")
+        eq(rows[36].mandatory, "38", "goto-list: the ayah count sits on the right")
+        eq(rows[114].surah, 114, "goto-list: a row carries its surah number")
+        eq(GL.items(gl_labels, nil, 1)[2].mandatory, nil,
+            "goto-list: no counts, no right-hand text")
+        eq(#GL.items(nil, nil, 1), 0, "goto-list: no labels gives an empty list")
+    end
+    eq(GL.rows(10, 1500, 86), 10, "goto-list: the user's rows-per-page setting wins")
+    eq(GL.rows(nil, 1500, 86), 17, "goto-list: a taller screen gets more rows")
+    eq(GL.rows(nil, 800, 86), 14, "goto-list: never fewer than the stock 14")
+    eq(GL.rows(nil, 4000, 86), 22, "goto-list: never more than 22")
+    eq(GL.rows(nil, 1500, nil), 17, "goto-list: a missing row height falls back to 86 px")
+    eq(GL.rows(nil, nil, 0), 14, "goto-list: no sizes at all cannot divide by zero")
+    -- the list itself, run live from the source with a fake Menu
+    do
+        local fn_a = gsrc:find("function GotoDialog:showSurahList()", 1, true)
+        local fn_b = gsrc:find("function GotoDialog:onCloseWidget()", 1, true)
+        eq(fn_a ~= nil and fn_b ~= nil and fn_a < fn_b, true,
+            "goto-list: the list function is present")
+        local shown, closed, updates = {}, {}, {}
+        local fake_ui = {
+            show = function(_, w) shown[#shown + 1] = w end,
+            close = function(_, w) closed[#closed + 1] = w end,
+        }
+        local fake_screen = { scaleBySize = function(_, n) return n * 2 end }
+        local D = assert(loadstring("local UIManager, Screen = ...\n"
+            .. gsrc:sub(gl_a, gl_b - 1)
+            .. "\nlocal GotoDialog = {}\n"
+            .. gsrc:sub(fn_a, fn_b - 1)
+            .. "\nreturn GotoDialog\n"))(fake_ui, fake_screen)
+        local saved_menu = package.loaded["ui/widget/menu"]
+        local saved_grs = G_reader_settings
+        G_reader_settings = nil
+        local last_menu
+        package.loaded["ui/widget/menu"] = { new = function(_, spec)
+            spec.switchItemTable = function(self2, title, items, n)
+                self2.switched = { title = title, items = items, n = n }
+            end
+            last_menu = spec
+            return spec
+        end }
+        local dlg = setmetatable({
+            labels = gl_labels, counts = gl_counts, surah_text = "Surah",
+            screen_width = 600, screen_height = 1000,
+            surah_widget = { getValue = function() return gl_labels[36], 36 end },
+            update = function(_, sn, an) updates[#updates + 1] = sn .. ":" .. an end,
+        }, { __index = D })
+        dlg:showSurahList()
+        eq(shown[1], last_menu, "goto-list: the list is shown")
+        eq(dlg.surah_list, last_menu, "goto-list: the dialog remembers its open list")
+        eq(last_menu.title, "Surah", "goto-list: titled with the column's name")
+        eq(#last_menu.item_table, 114, "goto-list: all 114 surahs are listed")
+        eq(last_menu.item_table.current, 36, "goto-list: the picker's surah is the bold row")
+        eq(last_menu.switched.n, 36, "goto-list: it opens on the current surah's page")
+        eq(last_menu.covers_fullscreen, true, "goto-list: a full-screen list")
+        eq(last_menu.items_per_page, 14, "goto-list: rows per page follow the screen")
+        last_menu.onMenuSelect(last_menu, last_menu.item_table[87])
+        eq(closed[1], last_menu, "goto-list: a pick closes the list")
+        eq(updates[1], "87:1", "goto-list: a pick moves the dialog to that surah, ayah 1")
+        eq(dlg.surah_list, nil, "goto-list: a pick clears the list reference")
+        dlg:showSurahList()
+        last_menu.close_callback()
+        eq(dlg.surah_list, nil, "goto-list: closing without a pick clears the reference")
+        eq(#updates, 1, "goto-list: closing without a pick changes nothing")
+        dlg:showSurahList()
+        last_menu.onMenuSelect(last_menu, nil)
+        eq(#updates, 1, "goto-list: a pick without a row changes nothing")
+        eq(closed[#closed], last_menu, "goto-list: a pick without a row still closes the list")
+        G_reader_settings = { readSetting = function(_, k)
+            return k == "items_per_page" and 9 or nil end }
+        dlg:showSurahList()
+        eq(last_menu.items_per_page, 9, "goto-list: the user's rows-per-page setting is used")
+        package.loaded["ui/widget/menu"] = saved_menu
+        G_reader_settings = saved_grs
     end
 end
 

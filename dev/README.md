@@ -29,8 +29,8 @@ Path resolution (all auto-detected, override via env):
 | `QURAN_EBOOK_DIR` | `../quran-ebook` | `data/*.sqlite` + `output/` build artifacts for the real-db round trips (skip when absent) |
 | `KOREADER_DIR` | `/Applications/KOReader.app/Contents/koreader` | sqlite binding + CREngine for the real-document tests (skip when absent) |
 
-Full run on the reference setup: 1857 tests (2026-11-10). Stock-luajit
-run without KOReader/data: 1330 tests + skips, still authoritative for
+Full run on the reference setup: 1890 tests (2026-11-10). Stock-luajit
+run without KOReader/data: 1366 tests + skips, still authoritative for
 everything that ran.
 
 CI (`.github/workflows/check.yml`) parse-checks every Lua file and runs
@@ -45,6 +45,9 @@ env-gated on `KO_MECHTEST`, that opens a plugin surface and captures it.
 
 ```zsh
 KOHOME=/tmp/kohome            # isolated profile, never your real one
+BOOK=/tmp/kobooks/book.epub   # a COPY of the book, never the original:
+                              # KOReader writes the book's settings folder
+                              # (book.sdr) next to the book it opens
 mkdir -p $KOHOME/patches $KOHOME/plugins
 ln -sfn "$(pwd)" $KOHOME/plugins/quran.koplugin
 cp dev/patches/2-quran-shot.lua $KOHOME/patches/
@@ -53,8 +56,12 @@ cp dev/patches/2-quran-shot.lua $KOHOME/patches/
 KO_HOME=$KOHOME KO_MECHTEST=1 KO_MECHTEST_MODE=panel \
   KO_MECHTEST_OUT=$PWD/shot.png \
   EMULATE_READER_W=1100 EMULATE_READER_H=1500 \
-  /Applications/KOReader.app/Contents/MacOS/koreader /ABSOLUTE/path/to/book.epub
+  SDL_VIDEODRIVER=dummy \
+  /Applications/KOReader.app/Contents/MacOS/koreader $BOOK
 ```
+
+`SDL_VIDEODRIVER=dummy` runs it without a window (the screenshot comes
+from KOReader's own frame buffer); leave it out to watch the run.
 
 Modes: `panel · goto · card · popup · browser · themes · themeflow ·
 uap · phrases · similar · surahhub · dictindex · getbooks · marker ·
@@ -66,6 +73,14 @@ manifest and `KO_MECHTEST_TRANSLANG` to drill into one language). Gotchas: the b
 relative path silently opens the file manager); the first run of a fresh
 KO_HOME shows a one-time color-rendering popup: run twice and use the
 second shot.
+
+## Shared knowledge
+
+This plugin is one of five Quran projects kept side by side on the
+maintainer's machine. Their shared map (who owns which data and tools,
+the shared formats, lessons learned) is a local file:
+`~/adm/projects/quran-explorer/docs/quran_projects_map.md`. The working
+rules for this repo are in quran-ebook's `CLAUDE.md`.
 
 ## Release / packaging
 
