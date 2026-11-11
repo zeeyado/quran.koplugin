@@ -1,17 +1,17 @@
 --[[--
 quran_roots.lua — v1.12 hub: the root explorer (Lane + morphology).
 
-Data: lane-vN.sqlite — the per-root extract of the quran-explorer KB
-(Perseus TEI of Lane's Lexicon, public domain) — and morphology-vN.sqlite
+Data: lane-vN.sqlite, the per-root extract of the knowledge base
+(Perseus TEI of Lane's Lexicon, public domain), and morphology-vN.sqlite
 (D-R2-1 B2: per-occurrence spine — QAC/QuranMorph lemma witnesses, EQTB
 glosses, honest per-root totals, per-word Lane-headword sense map).
 Both installed to <koreader>/data/quran/ by the asset manager
 ("quran_lane" / "quran_morphology" data packages) or dropped next to the
 plugin for development. Opened read-only via KOReader's lua-ljsqlite3.
 
-Contracts (respected here): docs/lane_handover_2026-07.md —
+Contracts (respected here). The lane package:
 suspect/is_xref rows excluded, root_id trusted, quran_freq ranks, seq
-preserves Lane's article order — and docs/morphology_handover_2026-07.md:
+preserves Lane's article order. The morphology package:
 group by form_key (NEVER lemma_eqtb), hide confidence='low' sense rows,
 word_headword ids target the lane build shipped WITH the extract (the
 meta.created pairing gate below), missing rows are honest misses (fall

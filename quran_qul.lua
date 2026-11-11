@@ -236,7 +236,7 @@ end
 --- QUL's cross-topic links ("related_topics" ids), with counts. Sparse
 -- upstream (17 of 2,512 topics carry them) but free to surface — the
 -- dynamic-xray "linked items" idiom; richer link data (concepts,
--- characters, semantic pairs) is an explorer-side extract away.
+-- characters, semantic pairs) would need one more data package.
 function M.relatedTopics(conn, t)
     local ids, marks = {}, {}
     for id in tostring(t.related_topics or ""):gmatch("%d+") do

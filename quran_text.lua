@@ -1,6 +1,6 @@
 --[[--
 Quran text & translation access — reads the text-vN.sqlite data package
-(built by quran-explorer kb/export/quran_text_extract.py, shipped as the
+(built from the knowledge base, outside this repo, shipped as the
 quran_text asset) PLUS any installed per-translation packages
 (text_<slug>-vN.sqlite, ND-28: one sqlite per QUL edition, built by
 quran-ebook tools/build_text_translations.py --packages). Provides the

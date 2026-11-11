@@ -2,15 +2,15 @@
 quran_connections.lua — DA-7 connections: characters (figures), stories
 (narrative units), and QurSim semantic similarity.
 
-Data: connections-vN.sqlite (explorer-side kb/export/connections_extract.py;
-H3 ask 2026-07-18), installed to <koreader>/data/quran/ by the asset
+Data: connections-vN.sqlite (built from the knowledge base, outside
+this repo), installed to <koreader>/data/quran/ by the asset
 manager ("quran_connections" data package) or dropped next to the plugin
 for development.
 
 Keys are spine-stable: ayah_key = surah*1000 + ayah, word_id =
 surah*1e6 + ayah*1e3 + pos (all Hafs, invariant D8) — no paired-build
 requirement with any other package. All roster/unit rows are
-research-candidate data (explorer A2 posture: label, don't filter) —
+research-candidate data (the rule: label, don't filter):
 the entity About screens carry the label; lists stay clean.
 
 Semantic similarity is DIRECTED (out-edge = the target is cited under

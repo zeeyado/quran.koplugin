@@ -694,7 +694,7 @@ end
 --- Display-normalize KFGQPC Arabic for UI-font surfaces (browser Menu
 -- rows, TextViewer): the QPC trio renders as wrong tanween / a
 -- %-looking mark (U+065E) outside the QPC fonts. Same mapping the
--- word-dict build applies (companion_resources 1.1c); exposed as a
+-- word-dict build applies; exposed as a
 -- method so the browser/reader modules share the one truth (owner
 -- report 2026-07-18: occurrence forms showed percent marks).
 function Quran:displayArabic(text)

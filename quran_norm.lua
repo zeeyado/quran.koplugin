@@ -1,13 +1,12 @@
 --[[--
 Arabic/Latin search-text normalizer — the Lua half of the norm() contract
-(norm_version = 1) shared with the quran-explorer extract
-(kb/export/quran_text_extract.py, which builds text-vN.sqlite's FTS
-columns). The two implementations MUST transform text identically: the
-extract normalizes what gets indexed, this module normalizes what gets
-queried. Parity is locked by dev/norm_fixture.lua
-(regenerated with every extract run) — never change one side alone; bump
-norm_version on BOTH sides and rebuild/re-ship the text package when the
-mapping changes.
+(norm_version = 1) shared with the Python builders of the text packages
+(they fill the FTS columns of text-vN.sqlite and of the per-translation
+packages). All sides MUST transform text identically: the builders
+normalize what gets indexed, this module normalizes what gets queried.
+Parity is locked by dev/norm_fixture.lua (regenerated with every build of
+the text package). Never change one side alone; bump norm_version on
+ALL sides and rebuild/re-ship the text package when the mapping changes.
 
 Per codepoint, in this order:
  1. FOLD  alef variants (0622/0623/0625/0671 -> 0627), 0624 -> 0648,

@@ -2,7 +2,7 @@
 quran_masaq.lua — word-by-word i'rab from the MASAQ layer (DA-7
 batch 2; H3 ask + extract 2026-07-18).
 
-Data: masaq-vN.sqlite (explorer-side kb/export/masaq_extract.py),
+Data: masaq-vN.sqlite (built from the knowledge base, outside this repo),
 installed to <koreader>/data/quran/ ("quran_masaq" data package) or
 dropped next to the plugin for development.
 
