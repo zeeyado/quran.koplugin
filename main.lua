@@ -4714,7 +4714,7 @@ end
 -- partial-rerendering enable window (reads as "partial rendering
 -- disabled"). Margins are now KOReader's own concern — the "Show header
 -- bar" help text points the user at the top-margin setting. Guide item:
--- per-Quran-book KOReader-settings hook (agenda §D-R2-4 remainder).
+-- per-Quran-book KOReader-settings hook.
 
 --- ND-6 (owner policy 2026-07-25): when the header is switched ON,
 -- raise the top margin to 5 only if it is currently LOWER — once, at

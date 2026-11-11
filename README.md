@@ -90,3 +90,9 @@ rig. See [`dev/README.md`](dev/README.md). The plugin's asset builders
 
 [GPL-3.0](LICENSE). Data and font credits are listed in the
 [quran-ebook README](https://github.com/zeeyado/quran-ebook#credits).
+
+## Corrections and removal
+
+This is a free, non-commercial project. If something the plugin carries
+or installs is yours and you want it credited differently, corrected or
+removed, [open an issue](../../issues). It will be done at once.

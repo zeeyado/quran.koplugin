@@ -2912,9 +2912,12 @@ eq(idby[2], 2, "idx: per-surah item count")
 local fidx = io.open(DATA_ROOT .. "/output/stardict/quran_qpc_en.idx", "rb")
 if fidx then
     local blob = fidx:read("*a"); fidx:close()
-    -- 97041 since the 2026-07-18 Warsh synonym layer (+25,642 headwords in
-    -- the KFGQPC Warsh EPUB encoding; was 71399 after the L2 lemma rebuild)
-    eq(#IDX.parse(blob), 97041, "idx: real word-dict idx fully parsed")
+    -- 97065 since 2026-11-11: +24 headwords, the words beside a sajdah
+    -- sign keyed without the sign (KOReader selects the sign as a word of
+    -- its own). 97041 since the 2026-07-18 Warsh synonym layer (+25,642
+    -- headwords in the KFGQPC Warsh EPUB encoding; was 71399 after the L2
+    -- lemma rebuild).
+    eq(#IDX.parse(blob), 97065, "idx: real word-dict idx fully parsed")
 end
 local aidx = io.open((os.getenv("HOME") or "")
     .. "/Library/Application Support/koreader/data/dict/stardict/"
