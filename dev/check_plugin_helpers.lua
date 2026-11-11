@@ -7790,4 +7790,1058 @@ do
         "detect: a missing document object does not break detection")
 end
 
+-- 2026-11-11: the book style guard (quran_setup.lua). A reader whose
+-- KOReader defaults have "Embedded Style" / "Embedded Fonts" off gets a
+-- newly opened Quran book in a fallback font with a broken layout. The
+-- guard switches both on once per book, before the book is loaded when it
+-- can, and leaves a later manual "off" alone.
+do
+    local function slurp(name)
+        local fh = assert(io.open(PLUGIN_DIR .. "/" .. name, "r"))
+        local s = fh:read("*a"); fh:close()
+        return s
+    end
+    local ssrc = slurp("quran_setup.lua")
+    local sg_a = ssrc:find("-- [style-guard]", 1, true)
+    local sg_b = ssrc:find("-- [/style-guard]", 1, true)
+    eq(sg_a ~= nil and sg_b ~= nil and sg_a < sg_b, true,
+        "guard: helper block markers present")
+    local SG = assert(loadstring(ssrc:sub(sg_a, sg_b - 1)
+        .. "\nreturn { isQuran = isQuranMeta, ours = isOurSubject, ourBook = isOurBook,"
+        .. " effective = effective, on = styleOn,"
+        .. " opfPath = containerOpfPath, opfMeta = opfMeta, early = earlyPlan,"
+        .. " ready = readyPlan, FLAG = FLAG, STYLE = STYLE_KEY, FONTS = FONTS_KEY }\n"))()
+    eq(SG.STYLE, "copt_embedded_css", "guard: KOReader's per-book key for Embedded Style")
+    eq(SG.FONTS, "copt_embedded_fonts", "guard: KOReader's per-book key for Embedded Fonts")
+    eq(SG.FLAG, "quran_style_guard", "guard: the plugin's own mark in the book's settings")
+
+    -- the plugin's broad metadata test, kept in step with its detection
+    eq(SG.isQuran("Quran", nil), true, "guard: subject Quran counts for the detection")
+    eq(SG.isQuran(nil, "The Noble Quran, Hafs"), true, "guard: a description with Quran counts for it")
+    eq(SG.isQuran("Tafsir\nQuran", ""), true, "guard: one subject among several")
+    eq(SG.isQuran("Fiction", "A short test book."), false, "guard: a novel does not")
+    eq(SG.isQuran(nil, nil), false, "guard: no metadata does not")
+    eq(SG.isQuran({}, 5), false, "guard: odd metadata types do not")
+    -- one of OURS: narrower, because the guard changes a book's settings
+    eq(SG.ours("Quran"), true, "guard-ours: the subject line our builder writes")
+    eq(SG.ours("Tafsir\n Quran \nArabic"), true, "guard-ours: that line among several subjects")
+    eq(SG.ours("Quranic studies"), false, "guard-ours: a book about the Quran is somebody else's")
+    eq(SG.ours("The Quran"), false, "guard-ours: a subject that only contains the word")
+    eq(SG.ours("quran"), false, "guard-ours: the exact spelling, as in the detection")
+    eq(SG.ours(nil), false, "guard-ours: no subject")
+    eq(SG.ours({}), false, "guard-ours: an odd type")
+    eq(SG.ourBook(true, "Quran", "Riwayat Hafs"), true, "guard-ours: detected, with our subject")
+    eq(SG.ourBook(true, nil, nil), true,
+        "guard-ours: detected by its structure alone (our older books carry no subject)")
+    eq(SG.ourBook(true, "Quranic studies", ""), false,
+        "guard-ours: detected only because its subject mentions the Quran: not ours")
+    eq(SG.ourBook(true, nil, "A commentary on the Quran"), false,
+        "guard-ours: detected only because its description mentions the Quran: not ours")
+    eq(SG.ourBook(false, "Quran", nil), false, "guard-ours: a book the plugin does not detect")
+    eq(SG.ourBook(nil, nil, nil), false, "guard-ours: nothing known")
+    do
+        -- the broad test must agree with the plugin's own detection
+        local dchunk = "local logger = { dbg = function() end, info = function() end }\n"
+            .. "local Quran = {}\n"
+            .. extract("--- Detect whether the current book is a quran-ebook EPUB",
+                       "--- Warsh->Hafs alignment map")
+            .. "\nreturn Quran\n"
+        local DET = assert(loadstring(dchunk))()
+        local samples = {
+            { "Quran", nil }, { nil, "Riwayat Warsh 'an Nafi', Quran" },
+            { "Fiction", "x" }, { nil, nil }, { "Quranic studies", "" }, { "quran", "" },
+        }
+        local same = true
+        for _i, s in ipairs(samples) do
+            local inst = {
+                ui = { doc_props = { keywords = s[1], description = s[2] },
+                       document = { info = { has_pages = false } } },
+                _getJuzTocPages = function() return nil end,
+                _detectQuranBook = DET._detectQuranBook,
+            }
+            if inst:_detectQuranBook() ~= SG.isQuran(s[1], s[2]) then same = false end
+        end
+        eq(same, true, "guard: the broad test agrees with the plugin's book detection")
+        -- and whatever is ours by its subject is also detected
+        local inside = true
+        for _i, s in ipairs(samples) do
+            if SG.ours(s[1]) and not SG.isQuran(s[1], s[2]) then inside = false end
+        end
+        eq(inside, true, "guard: a book that is ours by its subject is always a detected Quran book")
+    end
+
+    -- which value a switch opens with
+    eq(SG.effective(0, 1), 0, "guard: the book's own saved value wins, even off")
+    eq(SG.effective(1, 0), 1, "guard: the book's own saved on beats a default off")
+    eq(SG.effective(nil, 0), 0, "guard: no saved value, the reader's default applies")
+    eq(SG.effective(nil, nil), 1, "guard: nothing set anywhere is KOReader's stock on")
+    eq(SG.on(1, 1), true, "guard: both on is on")
+    eq(SG.on(1, 0), false, "guard: fonts off is off")
+    eq(SG.on(0, 1), false, "guard: style off is off")
+    eq(SG.on(nil, nil), false, "guard: unknown values are not on")
+
+    -- reading the package file
+    eq(SG.opfPath('<rootfile full-path="OEBPS/package.opf" media-type="x"/>'),
+        "OEBPS/package.opf", "guard: package path from the container")
+    eq(SG.opfPath("<rootfile full-path = 'content.opf'/>"), "content.opf",
+        "guard: single quotes and spaces around the equals sign")
+    eq(SG.opfPath("<container/>"), nil, "guard: a container without a package path")
+    eq(SG.opfPath(nil), nil, "guard: no container text")
+    do
+        local opf = [[<metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>T</dc:title>
+    <dc:description>Riwayat Warsh &#x27;an Nafi&#x27;, ayah-by-ayah</dc:description>
+    <dc:publisher>quran-ebook</dc:publisher>
+    <dc:subject>Quran</dc:subject>
+    <dc:subject id="s2">Tafsir</dc:subject>
+</metadata>]]
+        local kw, desc = SG.opfMeta(opf)
+        eq(kw, "Quran\nTafsir", "guard: every subject is read")
+        eq(desc ~= nil and desc:find("Warsh", 1, true) ~= nil, true, "guard: the description is read")
+        eq(SG.ours(kw), true, "guard: our own package text is recognised as ours")
+        local kw2, desc2 = SG.opfMeta("<metadata><dc:title>T</dc:title></metadata>")
+        eq(kw2, nil, "guard: no subject gives none")
+        eq(desc2, nil, "guard: no description gives none")
+        eq(select("#", SG.opfMeta(nil)), 2, "guard: no package text gives two empty values")
+    end
+
+    -- before the book is loaded
+    local function early(o)
+        if o.guard_on == nil then o.guard_on = true end
+        return SG.early(o)
+    end
+    eq(early({}), "skip", "guard-early: stock KOReader needs nothing")
+    eq(early({ default_css = 0, default_fonts = 0 }), "peek",
+        "guard-early: defaults off and a book never opened: look inside the file")
+    eq(early({ default_css = 1, default_fonts = 0 }), "peek",
+        "guard-early: only the fonts default off still counts")
+    eq(early({ default_css = 0, default_fonts = 0, props = { keywords = "Quran" } }), "fix",
+        "guard-early: defaults off and saved metadata says Quran")
+    eq(early({ default_css = 0, default_fonts = 0, props = { keywords = "Fiction" } }), "skip",
+        "guard-early: defaults off, another book: left alone, no look inside")
+    eq(early({ saved_css = 0, saved_fonts = 0, props = { keywords = "Quran" } }), "fix",
+        "guard-early: a Quran book saved as off under stock defaults (opened before the guard)")
+    eq(early({ saved_css = 1, saved_fonts = 0, props = { keywords = "Quran" } }), "fix",
+        "guard-early: style on but fonts off is fixed too")
+    eq(early({ default_css = 0, default_fonts = 0, props = { description = "On the Quran" } }), "skip",
+        "guard-early: a book that only mentions the Quran in its description is not ours")
+    eq(early({ default_css = 0, default_fonts = 0, props = { keywords = "Quranic studies" } }), "skip",
+        "guard-early: nor is a book about the Quran")
+    eq(early({ default_css = 0, default_fonts = 0, saved_css = 1, saved_fonts = 1,
+               props = { keywords = "Quran" } }), "skip",
+        "guard-early: the book's own saved on needs nothing")
+    eq(early({ default_css = 0, default_fonts = 0, flag = { state = "fixed" },
+               saved_css = 0, saved_fonts = 0, props = { keywords = "Quran" } }), "skip",
+        "guard-early: a book seen before is the reader's (a manual off stays off)")
+    eq(early({ default_css = 0, default_fonts = 0, paged = true,
+               props = { keywords = "Quran" } }), "skip",
+        "guard-early: a paged document is left alone")
+    eq(early({ guard_on = false, default_css = 0, default_fonts = 0,
+               props = { keywords = "Quran" } }), "skip",
+        "guard-early: the guard's own switch off means nothing happens")
+
+    -- once the book is ready
+    eq(SG.ready({ state = "fixed", notice = true }, 1, 1, true, true), "notice",
+        "guard-ready: a fixed book tells the reader")
+    eq(SG.ready({ state = "fixed", notice = true }, 1, 1, false, true), "notice",
+        "guard-ready: the notice is owed even if the guard was switched off meanwhile")
+    eq(SG.ready({ state = "fixed", notice = true }, 1, 1, true, false), "notice",
+        "guard-ready: and even if the plugin's detection disagrees with the early look")
+    eq(SG.ready({ state = "fixed" }, 0, 0, true, true), "skip",
+        "guard-ready: seen before and off now: the reader's choice")
+    eq(SG.ready({ state = "ok" }, 0, 1, true, true), "skip",
+        "guard-ready: seen before with its style on, later switched off: left alone")
+    eq(SG.ready(nil, 1, 1, true, true), "mark", "guard-ready: first meeting with both on is remembered")
+    eq(SG.ready(nil, 1, 1, false, true), "mark", "guard-ready: remembered with the guard off too")
+    eq(SG.ready(nil, 0, 0, true, true), "fix", "guard-ready: first meeting with both off is fixed")
+    eq(SG.ready(nil, 1, 0, true, true), "fix", "guard-ready: first meeting with fonts off is fixed")
+    eq(SG.ready(nil, 0, 0, false, true), "skip", "guard-ready: guard off, nothing is changed or marked")
+    eq(SG.ready(nil, 0, 0, true, false), "skip", "guard-ready: a book that is not ours is never fixed")
+    eq(SG.ready(nil, 1, 1, true, false), "skip", "guard-ready: nor marked")
+    eq(SG.ready(nil, 0, 0, true, nil), "skip", "guard-ready: unknown counts as not ours")
+
+    -- the module itself, with stand-ins for the book's settings
+    local QS = dofile(PLUGIN_DIR .. "/quran_setup.lua")
+    local function fakeSettings(init)
+        local d = {}
+        for k, v in pairs(init or {}) do d[k] = v end
+        return {
+            _d = d,
+            readSetting = function(_, k) return d[k] end,
+            saveSetting = function(_, k, v) d[k] = v end,
+            isFalse = function(_, k) return d[k] == false end,
+            flush = function() end,
+        }
+    end
+    -- a stand-in for KOReader's archive reader: entries become known as
+    -- the iteration passes them, like the real one
+    local opens = 0
+    local function fakeArchiver(files, fail)
+        local Reader = {}
+        Reader.__index = Reader
+        function Reader:new() return setmetatable({ entries = {}, index = 0 }, self) end
+        function Reader:open(path)
+            opens = opens + 1
+            if fail == "open" then return nil end
+            if fail == "throw" then error("boom") end
+            self.index = 0
+            return path ~= nil
+        end
+        function Reader:iterate()
+            self.index = 0
+            return function()
+                self.index = self.index + 1
+                local f = files[self.index]
+                if not f then return nil end
+                local e = { path = f[1], mode = "file", index = self.index }
+                self.entries[f[1]] = e
+                return e
+            end
+        end
+        function Reader:extractToMemory(key)
+            local e = self.entries[key]
+            return e and files[e.index][2] or nil
+        end
+        function Reader:close() end
+        return { Reader = Reader }
+    end
+    local CONTAINER = '<rootfile full-path="OEBPS/package.opf"/>'
+    local QURAN_OPF = "<dc:subject>Quran</dc:subject>"
+    local NOVEL_OPF = "<dc:subject>Fiction</dc:subject><dc:description>A tale</dc:description>"
+    local saved_arch = package.loaded["ffi/archiver"]
+    local saved_grs = G_reader_settings
+    local function defaults(css, fonts)
+        G_reader_settings = { readSetting = function(_, k)
+            if k == "copt_embedded_css" then return css end
+            if k == "copt_embedded_fonts" then return fonts end
+        end }
+    end
+    local function doc(file) return { file = file, info = { has_pages = false } } end
+    local function load(ds, d, q)
+        QS.beforeLoad(q or { settings = fakeSettings() }, ds, d or doc("/books/q.epub"))
+        return ds._d
+    end
+
+    -- a Quran book opened before, saved as off (the owner's two books)
+    do
+        defaults(nil, nil)
+        local cache = os.tmpname()
+        local fh = assert(io.open(cache, "w")); fh:write("x"); fh:close()
+        local d = load(fakeSettings({ copt_embedded_css = 0, copt_embedded_fonts = 0,
+            doc_props = { keywords = "Quran" }, cache_file_path = cache }))
+        eq(d.copt_embedded_css, 1, "guard-load: a saved-off Quran book gets its style on")
+        eq(d.copt_embedded_fonts, 1, "guard-load: and its fonts on")
+        eq(type(d.quran_style_guard), "table", "guard-load: the book is marked")
+        eq(d.quran_style_guard.state, "fixed", "guard-load: marked as fixed")
+        eq(d.quran_style_guard.notice, true, "guard-load: a notice is owed")
+        local still = io.open(cache)
+        if still then still:close() end
+        eq(still, nil, "guard-load: the page cache built with the style off is removed")
+        os.remove(cache)
+    end
+    -- a book never opened, defaults off: the file itself is asked
+    defaults(0, 0)
+    opens = 0
+    package.loaded["ffi/archiver"] = fakeArchiver({
+        { "mimetype", "application/epub+zip" }, { "META-INF/container.xml", CONTAINER },
+        { "OEBPS/chapter-1.xhtml", "<html/>" }, { "OEBPS/package.opf", QURAN_OPF } })
+    do
+        local d = load(fakeSettings())
+        eq(opens, 1, "guard-load: a new book under off defaults is looked into once")
+        eq(d.copt_embedded_css, 1, "guard-load: a new Quran book is fixed before loading (package file last)")
+        eq(d.copt_embedded_fonts, 1, "guard-load: fonts too")
+        eq(d.quran_style_guard.notice, true, "guard-load: with a notice owed")
+    end
+    package.loaded["ffi/archiver"] = fakeArchiver({
+        { "OEBPS/package.opf", QURAN_OPF }, { "META-INF/container.xml", CONTAINER } })
+    eq(load(fakeSettings()).copt_embedded_css, 1,
+        "guard-load: a package file listed before the container is still found")
+    package.loaded["ffi/archiver"] = fakeArchiver({
+        { "META-INF/container.xml", CONTAINER }, { "OEBPS/package.opf", NOVEL_OPF } })
+    do
+        local d = load(fakeSettings())
+        eq(d.copt_embedded_css, nil, "guard-load: another new book keeps the reader's defaults")
+        eq(d.quran_style_guard, nil, "guard-load: and gets no mark")
+    end
+    package.loaded["ffi/archiver"] = fakeArchiver({ { "mimetype", "x" }, { "a.xhtml", "y" } })
+    eq(load(fakeSettings()).copt_embedded_css, nil,
+        "guard-load: a file without a container is left alone")
+    package.loaded["ffi/archiver"] = fakeArchiver({}, "open")
+    eq(load(fakeSettings()).copt_embedded_css, nil, "guard-load: an unreadable file is left alone")
+    package.loaded["ffi/archiver"] = fakeArchiver({}, "throw")
+    eq(load(fakeSettings()).copt_embedded_css, nil,
+        "guard-load: a reader that throws cannot stop the book from opening")
+    package.loaded["ffi/archiver"] = {}
+    eq(load(fakeSettings()).copt_embedded_css, nil,
+        "guard-load: a KOReader without the archive reader is left to the later check")
+    package.loaded["ffi/archiver"] = fakeArchiver({
+        { "META-INF/container.xml", CONTAINER }, { "OEBPS/package.opf", QURAN_OPF } })
+    opens = 0
+    eq(load(fakeSettings(), doc("/books/q.fb2")).copt_embedded_css, nil,
+        "guard-load: only EPUB files are looked into")
+    eq(opens, 0, "guard-load: another file type is not even opened")
+    eq(load(fakeSettings(), doc("/books/Q.EPUB")).copt_embedded_css, 1,
+        "guard-load: the file ending is matched in any letter case")
+    opens = 0
+    eq(load(fakeSettings({ doc_props = { keywords = "Fiction" } })).copt_embedded_css, nil,
+        "guard-load: a book with saved metadata is judged by it")
+    eq(opens, 0, "guard-load: and not looked into")
+    eq(load(fakeSettings({ quran_style_guard = { state = "fixed" }, copt_embedded_css = 0 }))
+        .copt_embedded_css, 0, "guard-load: a book seen before keeps a manual off")
+    eq(load(fakeSettings(), { file = "/books/q.epub", info = { has_pages = true } })
+        .copt_embedded_css, nil, "guard-load: a paged document is left alone")
+    eq(load(fakeSettings(), nil, { settings = fakeSettings({ style_guard = false }) })
+        .copt_embedded_css, nil, "guard-load: the guard's switch off stops it")
+    eq(load(fakeSettings(), nil, {}).copt_embedded_css, 1,
+        "guard-load: a plugin without a settings object still works (guard on)")
+    eq(pcall(QS.beforeLoad, {}, nil, nil), true,
+        "guard-load: no settings and no document do not raise")
+    eq(pcall(QS.beforeLoad, {}, fakeSettings(), {}), true,
+        "guard-load: a document without a file does not raise")
+    package.loaded["ffi/archiver"] = fakeArchiver({
+        { "META-INF/container.xml", CONTAINER },
+        { "OEBPS/package.opf", "<dc:subject>Quranic studies</dc:subject><dc:description>On the Quran</dc:description>" } })
+    eq(load(fakeSettings()).copt_embedded_css, nil,
+        "guard-load: a new book that only mentions the Quran is not ours and is left alone")
+    eq(load(fakeSettings({ copt_embedded_css = 0, doc_props = { keywords = "Quranic studies" } }))
+        .copt_embedded_css, 0, "guard-load: the same for such a book opened before")
+    do
+        -- the archive is closed on every path, a failed read included
+        local closes = 0
+        local arch = fakeArchiver({ { "META-INF/container.xml", CONTAINER },
+                                    { "OEBPS/package.opf", QURAN_OPF } })
+        arch.Reader.close = function() closes = closes + 1 end
+        package.loaded["ffi/archiver"] = arch
+        load(fakeSettings())
+        eq(closes, 1, "guard-load: the file is closed after a look")
+        arch.Reader.extractToMemory = function() error("bad zip") end
+        eq(load(fakeSettings()).copt_embedded_css, nil, "guard-load: a read that fails changes nothing")
+        eq(closes, 2, "guard-load: and the file is closed all the same")
+    end
+    defaults(nil, nil)
+    opens = 0
+    eq(load(fakeSettings()).copt_embedded_css, nil, "guard-load: stock defaults change nothing")
+    eq(opens, 0, "guard-load: stock defaults never look into a file")
+
+    -- the real archive reader on real books, where KOReader and the
+    -- sister repo's sample books are present
+    package.loaded["ffi/archiver"] = nil
+    do
+        local ok_arch, A = pcall(require, "ffi/archiver")
+        local ours = DATA_ROOT .. "/tests/quran_hafs-indopak_nastaleeq_word-inline_ar-en-hilali-khan.epub"
+        local other = DATA_ROOT .. "/tests/test_qcf_fatiha.epub"
+        if ok_arch and type(A) == "table" and A.Reader and exists(ours) and exists(other) then
+            defaults(0, 0)
+            eq(load(fakeSettings(), doc(ours)).copt_embedded_css, 1,
+                "guard-real: a real book of ours is recognised from its file (package file is entry 128)")
+            eq(load(fakeSettings(), doc(other)).copt_embedded_css, nil,
+                "guard-real: a real book without the Quran subject is left alone")
+            -- a real zip whose package file comes BEFORE the container:
+            -- the real reader has to go back for it
+            local tmp_base = os.tmpname()
+            local tmp = tmp_base .. ".epub"
+            local w = A.Writer and A.Writer:new()
+            if w and w:open(tmp, "zip") then
+                w:addFileFromMemory("mimetype", "application/epub+zip")
+                w:addFileFromMemory("OEBPS/package.opf", QURAN_OPF)
+                w:addFileFromMemory("OEBPS/chapter-1.xhtml", "<html/>")
+                w:addFileFromMemory("META-INF/container.xml", CONTAINER)
+                w:close()
+                eq(load(fakeSettings(), doc(tmp)).copt_embedded_css, 1,
+                    "guard-real: a package file stored before the container is found by the real reader")
+            else
+                print("skip guard-real odd-order test (no archive writer here)")
+            end
+            os.remove(tmp)
+            os.remove(tmp_base)
+            defaults(nil, nil)
+        else
+            print("skip guard-real tests (KOReader's archive reader or the sample books unavailable)")
+        end
+    end
+    package.loaded["ffi/archiver"] = saved_arch
+    G_reader_settings = saved_grs
+
+    -- once the book is ready
+    local UIMg = require("ui/uimanager")
+    local saved_show, saved_tick = UIMg.show, UIMg.nextTick
+    local shown, ticks = {}, {}
+    UIMg.show = function(_, w) shown[#shown + 1] = w end
+    UIMg.nextTick = function(_, fn) ticks[#ticks + 1] = fn end
+    local function runTicks()
+        local list = ticks
+        ticks = {}
+        for _i, fn in ipairs(list) do fn() end
+    end
+    local function reader(css, fonts, flag, has_cache)
+        local counts = { invalidated = 0, reloaded = 0 }
+        local d = {
+            file = "/books/q.epub",
+            configurable = { embedded_css = css, embedded_fonts = fonts },
+            hasCacheFile = function() return has_cache end,
+            invalidateCacheFile = function() counts.invalidated = counts.invalidated + 1 end,
+        }
+        local q = { _is_quran_book = true, settings = fakeSettings(), path = PLUGIN_DIR }
+        q.ui = { document = d, doc_settings = fakeSettings({ quran_style_guard = flag }),
+                 doc_props = { keywords = "Quran" },
+                 reloadDocument = function() counts.reloaded = counts.reloaded + 1 end }
+        return q, counts
+    end
+    -- the guard reopens a book by itself once per session; each case
+    -- below starts a fresh session
+    local function newSession() package.loaded["quran_setup_reopened"] = nil end
+    do
+        local q = reader(1, 1, { state = "fixed", notice = true })
+        QS.onReaderReady(q); runTicks()
+        eq(#shown, 1, "guard-ready: the notice is shown")
+        eq(shown[1].text:find("switched them on", 1, true) ~= nil, true,
+            "guard-ready: it says what was done")
+        eq(shown[1].text:find("\226\128\148", 1, true), nil, "guard-ready: no em dash in the notice")
+        eq(q.ui.doc_settings._d.quran_style_guard.notice, nil, "guard-ready: the notice is shown once")
+        eq(q.ui.doc_settings._d.quran_style_guard.state, "fixed", "guard-ready: the mark stays")
+        QS.onReaderReady(q); runTicks()
+        eq(#shown, 1, "guard-ready: the next opening is silent")
+        local q2 = reader(0, 0, { state = "fixed", notice = true })
+        QS.onReaderReady(q2); runTicks()
+        eq(#shown, 1, "guard-ready: no notice when the style is not on after all")
+        eq(q2.ui.doc_settings._d.quran_style_guard.notice, nil, "guard-ready: and the owed notice is dropped")
+        -- the early look said "ours" but the plugin's detection says no:
+        -- the reader is still told what was changed
+        local q3 = reader(1, 1, { state = "fixed", notice = true })
+        q3._is_quran_book = false
+        eq(QS.onReaderReady(q3), nil, "guard-ready: an owed notice does not reopen anything")
+        runTicks()
+        eq(#shown, 2, "guard-ready: an owed notice is shown even for a book the detection does not claim")
+    end
+    do
+        shown = {}
+        local q, c = reader(1, 1, nil)
+        eq(QS.onReaderReady(q), nil, "guard-ready: a book that is fine reports nothing to wait for")
+        runTicks()
+        eq(q.ui.doc_settings._d.quran_style_guard.state, "ok",
+            "guard-ready: a book met with its style on is remembered")
+        eq(#shown + c.reloaded, 0, "guard-ready: and nothing is shown or reopened")
+    end
+    do
+        newSession()
+        local q, c = reader(0, 0, nil, true)
+        eq(QS.onReaderReady(q), "reopening",
+            "guard-late: the plugin is told that this opening is about to be replaced")
+        eq(q.ui.document.configurable.embedded_css, 1, "guard-late: style switched on")
+        eq(q.ui.document.configurable.embedded_fonts, 1, "guard-late: fonts switched on")
+        eq(q.ui.doc_settings._d.copt_embedded_css, 1, "guard-late: saved in the book's settings")
+        eq(q.ui.doc_settings._d.copt_embedded_fonts, 1, "guard-late: fonts saved too")
+        eq(q.ui.doc_settings._d.quran_style_guard.notice, true, "guard-late: a notice is owed after the reopen")
+        eq(c.invalidated, 1, "guard-late: the cache built with the style off is dropped")
+        eq(c.reloaded, 0, "guard-late: the reopen waits for the next tick")
+        runTicks()
+        eq(c.reloaded, 1, "guard-late: the book is opened again")
+        -- the settings file could not be written, so the reopened book
+        -- looks unseen again: no second reopen in the same session
+        local q2, c2 = reader(0, 0, nil, true)
+        eq(QS.onReaderReady(q2), nil, "guard-late: a second automatic reopen of the same book is refused")
+        runTicks()
+        eq(c2.reloaded, 0, "guard-late: so a book whose settings cannot be saved cannot loop")
+        eq(q2.ui.doc_settings._d.copt_embedded_css, 1,
+            "guard-late: the switch is still saved for the next opening")
+        eq(QS.switchOn(q2), "reopening", "guard-late: the reader's own tap in the Setup menu may still reopen")
+        runTicks()
+        eq(c2.reloaded, 1, "guard-late: and does")
+    end
+    do
+        newSession()
+        local q, c = reader(1, 0, nil, false)
+        QS.onReaderReady(q); runTicks()
+        eq(c.invalidated, 0, "guard-late: no cache file, nothing to drop")
+        eq(c.reloaded, 1, "guard-late: fonts off alone is fixed and reopened too")
+    end
+    do
+        newSession()
+        local q, c = reader(0, 0, nil, true)
+        QS.onReaderReady(q)
+        q.ui.document = { file = "/books/other.epub" }   -- the reader moved on
+        runTicks()
+        eq(c.reloaded, 0, "guard-late: another book open by then is not reopened")
+    end
+    do
+        newSession()
+        local q, c = reader(0, 0, nil, true)
+        q.ui.reloadDocument = nil       -- a KOReader that cannot reopen a book
+        eq(QS.onReaderReady(q), nil, "guard-late: without a way to reopen, the opening goes on as usual")
+        eq(q.ui.doc_settings._d.copt_embedded_css, 1, "guard-late: the switch is saved for the next opening")
+        eq(c.invalidated, 0, "guard-late: and the cache is left for KOReader to sort out")
+    end
+    do
+        newSession()
+        local q, c = reader(0, 0, nil, true)
+        q.settings = fakeSettings({ style_guard = false })
+        eq(QS.onReaderReady(q), nil, "guard-late: the guard's switch off reports nothing")
+        runTicks()
+        eq(q.ui.document.configurable.embedded_css, 0, "guard-late: the guard's switch off changes nothing")
+        eq(q.ui.doc_settings._d.quran_style_guard, nil, "guard-late: and leaves no mark")
+        eq(c.reloaded, 0, "guard-late: and reopens nothing")
+    end
+    do
+        newSession()
+        local q, c = reader(0, 0, nil, true)
+        q._is_quran_book = false
+        QS.onReaderReady(q); runTicks()
+        eq(q.ui.document.configurable.embedded_css, 0, "guard-late: another book is never touched")
+        eq(q.ui.doc_settings._d.quran_style_guard, nil, "guard-late: nor marked")
+        eq(c.reloaded, 0, "guard-late: nor reopened")
+        eq(QS.styleState(q), "none", "setup: no Quran book open reads as none")
+    end
+    do
+        -- a book the plugin detects only because its metadata mentions
+        -- the Quran: somebody else's book, its settings stay its reader's
+        newSession()
+        local q, c = reader(0, 0, nil, true)
+        q.ui.doc_props = { keywords = "Quranic studies", description = "An introduction" }
+        QS.onReaderReady(q); runTicks()
+        eq(q.ui.document.configurable.embedded_css, 0, "guard-late: a book about the Quran is not switched on")
+        eq(q.ui.doc_settings._d.quran_style_guard, nil, "guard-late: and gets no mark")
+        eq(c.reloaded, 0, "guard-late: and is not reopened")
+        eq(QS.styleState(q), "off", "setup: the Setup row still offers the switch for it")
+        -- one of our older books: no subject at all, known by its juz entries
+        local q2, c2 = reader(0, 0, nil, true)
+        q2.ui.doc_props = {}
+        eq(QS.onReaderReady(q2), "reopening", "guard-late: a book known by its structure alone is ours")
+        runTicks()
+        eq(c2.reloaded, 1, "guard-late: and is fixed like the others")
+        local q3 = reader(0, 0, nil, true)
+        q3.ui.doc_props = nil
+        newSession()
+        eq(pcall(QS.onReaderReady, q3), true, "guard-late: missing metadata does not raise")
+    end
+    newSession()
+    eq(QS.styleState(reader(1, 1)), "on", "setup: both on reads as on")
+    eq(QS.styleState(reader(1, 0)), "off", "setup: fonts off reads as off")
+    eq(QS.styleState({}), "none", "setup: no reader at all reads as none")
+    eq(QS.switchOn({}), false, "setup: switching on without a book does nothing")
+
+    -- the Setup menu
+    do
+        shown = {}
+        local q, c = reader(0, 0, { state = "fixed" }, false)
+        q.ui.gestures = { settings = { data = { gesture_reader = {}, gesture_fm = {} },
+                                       flush = function() end } }
+        local item = QS.menuItem(q)
+        eq(item.text, "Setup", "setup-menu: the row is called Setup")
+        eq(#item.sub_item_table, 3, "setup-menu: three rows")
+        local style, auto, ges = item.sub_item_table[1], item.sub_item_table[2], item.sub_item_table[3]
+        eq(style.text_func(), "This book's style and fonts: off (tap to switch on)",
+            "setup-menu: an off book says so")
+        eq(style.enabled_func(), true, "setup-menu: the row is live in a Quran book")
+        local closed = 0
+        style.callback({ closeMenu = function() closed = closed + 1 end })
+        runTicks()
+        eq(closed, 1, "setup-menu: switching on closes the menu first")
+        eq(c.reloaded, 1, "setup-menu: a tap on an off book switches on and reopens")
+        eq(style.text_func(), "This book's style and fonts: on", "setup-menu: then it reads on")
+        style.callback({})
+        eq(#shown, 1, "setup-menu: a tap on an on book only says so")
+        eq(c.reloaded, 1, "setup-menu: and reopens nothing")
+        q._is_quran_book = false
+        eq(style.enabled_func(), false, "setup-menu: greyed out outside a Quran book")
+        eq(style.text_func(), "This book's style and fonts (open a Quran book)",
+            "setup-menu: and says why")
+        eq(auto.checked_func(), true, "setup-menu: the guard is on by default")
+        auto.callback()
+        eq(q.settings._d.style_guard, false, "setup-menu: unticking saves the guard off")
+        eq(auto.checked_func(), false, "setup-menu: and shows unticked")
+        auto.callback()
+        eq(auto.checked_func(), true, "setup-menu: ticking brings it back")
+        eq(ges.text_func(), "Gestures: none set", "setup-menu: no gesture yet")
+        q.ui.gestures.settings.data.gesture_reader.tap_right_bottom_corner = { quran_quick_panel = true }
+        q.ui.gestures.settings.data.gesture_fm.short_diagonal_swipe = { quran_browser = true }
+        eq(ges.text_func(), "Gestures: 2 set", "setup-menu: counts the actions that have a gesture")
+    end
+    UIMg.show, UIMg.nextTick = saved_show, saved_tick
+
+    -- wired into the plugin
+    eq(src:find("function Quran:onDocSettingsLoad(doc_settings, document)", 1, true) ~= nil, true,
+        "guard-wire: the plugin listens before a book is loaded")
+    eq(src:find("pcall(setup.beforeLoad, self, doc_settings, document)", 1, true) ~= nil, true,
+        "guard-wire: a fault in the guard cannot stop a book from opening")
+    do
+        -- KOReader's own docsettingtweak plugin answers the
+        -- DocSettingsLoad event and stops it there, and on Kobo and
+        -- Kindle it comes before this plugin. So the early check also
+        -- runs from init, where the book's settings exist and nothing
+        -- has read them yet (found by the review, 2026-11-11).
+        local init_a = src:find("function Quran:init()", 1, true)
+        local init_b = src:find("\nend\n", init_a, true)
+        local opened = src:find("self.settings = LuaSettings:open", init_a, true)
+        local call = src:find("self:onDocSettingsLoad(self.ui.doc_settings, self.ui.document)", init_a, true)
+        eq(opened ~= nil and call ~= nil and opened < call and call < init_b, true,
+            "guard-wire: the early check also runs from init, once the plugin's own settings are open")
+        local guard = src:find("if self.ui.document and self.ui.doc_settings then", init_a, true)
+        eq(guard ~= nil and guard < call, true,
+            "guard-wire: and only when a book is being opened (not in the file browser)")
+    end
+    do
+        local rr = src:find("function Quran:onReaderReady()", 1, true)
+        local det = src:find("self._is_quran_book = self:_detectQuranBook()", rr, true)
+        local call = src:find("pcall(setup.onReaderReady, self)", rr, true)
+        eq(det ~= nil and call ~= nil and det < call, true,
+            "guard-wire: the later check runs after the book detection")
+        -- a reopen is on its way: this opening must not consume the
+        -- pending go-to or put the restore offer on screen
+        local stop = src:find('elseif res == "reopening" then', rr, true)
+        local goto_i = src:find('readSetting("quran_pending_goto")', rr, true)
+        local restore = src:find("self:_checkOldSidecar()", rr, true)
+        eq(stop ~= nil and goto_i ~= nil and restore ~= nil
+            and call < stop and stop < goto_i and stop < restore, true,
+            "guard-wire: before a reopen, the pending go-to and the restore offer are left to the new opening")
+        eq(src:sub(stop, stop + 60):find("return", 1, true) ~= nil, true,
+            "guard-wire: by returning from the start-up at that point")
+    end
+    eq(src:find("pcall(function() return setup and setup.menuItem(self) end)", 1, true) ~= nil
+        and src:find("table.insert(menu_items.quran.sub_item_table, setup_row)", 1, true) ~= nil,
+        true, "guard-wire: the Setup row is added to the Quran menu, and a fault in it cannot take the menu down")
+end
+
+-- 2026-11-11: gestures for the plugin's actions (quran_gestures.lua),
+-- modelled on KOAssistant's gesture picker
+do
+    package.preload["ui/widget/notification"] = package.preload["ui/widget/notification"]
+        or function() return { new = function(_, o) return o end } end
+    package.preload["ui/widget/confirmbox"] = package.preload["ui/widget/confirmbox"]
+        or function() return { new = function(_, o) return o end } end
+    package.preload["ui/widget/buttondialog"] = package.preload["ui/widget/buttondialog"]
+        or function() return { new = function(_, o) return o end } end
+    local QG = dofile(PLUGIN_DIR .. "/quran_gestures.lua")
+
+    -- the copy of KOReader's gesture slots
+    local ids, n_slots = {}, 0
+    local reader_only = {}
+    for _i, section in ipairs(QG.SECTIONS) do
+        eq(type(section.label) == "string" and section.label ~= "", true,
+            "gestures: section " .. section.key .. " has a label")
+        for _j, slot in ipairs(section.slots) do
+            if ids[slot.id] then error("FAIL gestures: duplicate slot id " .. slot.id) end
+            ids[slot.id] = section.key
+            n_slots = n_slots + 1
+            if type(slot.label) ~= "string" or slot.label == "" then
+                error("FAIL gestures: slot without a label " .. slot.id)
+            end
+            if slot.reader_only then reader_only[#reader_only + 1] = slot.id end
+        end
+    end
+    eq(n_slots >= 70, true, "gestures: the whole list, not a shortlist (" .. n_slots .. ")")
+    table.sort(reader_only)
+    do
+        local fh = io.open(KO_DIR .. "/plugins/gestures.koplugin/main.lua", "r")
+        if fh then
+            local gsrc = fh:read("*a"); fh:close()
+            local block = gsrc:match("local gestures_list = {(.-)\n}")
+            eq(block ~= nil, true, "gestures-copy: KOReader's gesture list found")
+            local theirs, n_theirs = {}, 0
+            for id in block:gmatch("\n%s*([%w_]+)%s*=") do
+                if id ~= "multiswipe" then theirs[id] = true; n_theirs = n_theirs + 1 end
+            end
+            local missing, extra = {}, {}
+            for id in pairs(theirs) do if not ids[id] then missing[#missing + 1] = id end end
+            for id in pairs(ids) do if not theirs[id] then extra[#extra + 1] = id end end
+            table.sort(missing); table.sort(extra)
+            eq(table.concat(missing, ","), "", "gestures-copy: no KOReader slot is missing here")
+            eq(table.concat(extra, ","), "", "gestures-copy: no slot here that KOReader lacks")
+            eq(n_slots, n_theirs, "gestures-copy: the same number of slots")
+            local items = gsrc:match("local section_items = {(.-)\n}")
+            eq(items ~= nil, true, "gestures-copy: KOReader's sections found")
+            local wrong = {}
+            for key, body in items:gmatch("\n%s*([%w_]+)%s*=%s*{(.-)}") do
+                for id in body:gmatch('"([%w_]+)"') do
+                    if ids[id] ~= key then wrong[#wrong + 1] = id end
+                end
+            end
+            eq(table.concat(wrong, ","), "", "gestures-copy: every slot sits in KOReader's section")
+            local ro = gsrc:match("local reader_only = {(.-)}")
+            eq(ro ~= nil, true, "gestures-copy: KOReader's reader-only slots found")
+            local theirs_ro = {}
+            for id in ro:gmatch("([%w_]+)%s*=%s*true") do theirs_ro[#theirs_ro + 1] = id end
+            table.sort(theirs_ro)
+            eq(table.concat(reader_only, ","), table.concat(theirs_ro, ","),
+                "gestures-copy: the same slots are reader-only")
+            -- KOReader's own gesture menu: the row of the double-tap
+            -- section is live only in a book and only with double taps on
+            local dt = gsrc:find("text = section_titles.double_tap,", 1, true)
+            local cond = dt and gsrc:find(
+                "return not self.is_docless and self.ui.disable_double_tap ~= true", dt, true)
+            eq(dt ~= nil and cond ~= nil and cond - dt < 200, true,
+                "gestures-copy: KOReader's menu offers double taps only in books and only when enabled")
+            local mt = gsrc:find("if self.has_multitouch then", 1, true)
+            eq(mt ~= nil and gsrc:find("section_titles.two_finger_tap", mt, true) ~= nil
+                and gsrc:find("section_titles.two_finger_rotation", mt, true) ~= nil, true,
+                "gestures-copy: KOReader's menu offers the two-finger sections only with multitouch")
+            eq(gsrc:find('G_reader_settings:isTrue("multiswipes_enabled")', 1, true) ~= nil, true,
+                "gestures-copy: multiswipes still hang on KOReader's multiswipes_enabled switch")
+            eq(gsrc:find('G_reader_settings:isTrue("ignore_hold_corners")', 1, true) ~= nil, true,
+                "gestures-copy: corner long-presses still hang on KOReader's ignore_hold_corners switch")
+        else
+            print("skip gestures-copy tests (no KOReader here; the copy is taken as read)")
+        end
+    end
+
+    eq(QG.sectionOf("tap_right_bottom_corner").key, "tap_corner", "gestures: a slot knows its section")
+    eq(QG.sectionOf("multiswipe_west_east").key, "multiswipes", "gestures: a multiswipe's section")
+    eq(QG.sectionOf("no_such_gesture"), nil, "gestures: an unknown slot has no section")
+    eq(QG.slotLabel("tap_right_bottom_corner"), "Tap bottom-right corner", "gestures: a slot's words")
+    eq(QG.slotLabel("some_new_gesture"), "some new gesture", "gestures: an unknown slot is made readable")
+    eq(QG.modeLabel("gesture_reader"), "in books", "gestures: the reader mode in words")
+    eq(QG.modeLabel("gesture_fm"), "in the file browser", "gestures: the file browser mode in words")
+
+    eq(QG.slotState(nil), "free", "gestures: an unset slot is free")
+    eq(QG.slotState({}), "free", "gestures: an empty slot is free")
+    eq(QG.slotState({ settings = { show_as_quickmenu = true } }), "free",
+        "gestures: a slot holding only its settings is free")
+    eq(QG.slotState({ toggle_bookmark = true }), "taken", "gestures: a slot with an action is taken")
+    eq(select(2, QG.slotState({ a = true, b = true, settings = {} })), 2,
+        "gestures: the settings table is not counted as an action")
+
+    local tap = QG.sectionOf("tap_right_bottom_corner")
+    local dbl = QG.sectionOf("double_tap_left_side")
+    local two = QG.sectionOf("spread_gesture")
+    local multi = QG.sectionOf("multiswipe_west_east")
+    eq(QG.slotUsable(tap.slots[1], "gesture_reader"), true, "gestures: the top-left tap exists in books")
+    eq(QG.slotUsable(tap.slots[1], "gesture_fm"), false, "gestures: but not in the file browser")
+    eq(QG.slotUsable(tap.slots[4], "gesture_fm"), true, "gestures: the bottom-right tap exists in both")
+    local env_all = { multitouch = true, isTrue = function() return true end,
+                      nilOrTrue = function() return false end }
+    local env_stock = { multitouch = true, isTrue = function() return false end,
+                        nilOrTrue = function() return true end }
+    eq(QG.sectionBlock(tap, "gesture_fm", env_stock), nil, "gestures: corner taps are always on offer")
+    eq(QG.sectionBlock(dbl, "gesture_fm", env_all), "reader_only", "gestures: double taps only in books")
+    eq(QG.sectionBlock(dbl, "gesture_reader", env_stock), "off",
+        "gestures: double taps are off until KOReader's switch allows them")
+    eq(QG.sectionBlock(dbl, "gesture_reader", env_all), nil, "gestures: double taps on offer once allowed")
+    eq(QG.sectionBlock(multi, "gesture_reader", env_stock), "off", "gestures: multiswipes off by default")
+    eq(QG.sectionBlock(multi, "gesture_reader", env_all), nil, "gestures: multiswipes on offer once enabled")
+    eq(QG.sectionBlock(two, "gesture_reader", { multitouch = false }), "no_multitouch",
+        "gestures: two-finger gestures need a multitouch screen")
+    eq(QG.sectionBlock(two, "gesture_reader", env_stock), nil, "gestures: two-finger gestures with multitouch")
+    eq(QG.sectionBlock(dbl, "gesture_reader", nil), "off", "gestures: with nothing known, double taps stay off")
+
+    do
+        local mode = {
+            tap_right_bottom_corner = { quran_quick_panel = true },
+            tap_top_left_corner = { settings = {} },
+            tap_top_right_corner = {},
+        }
+        local free, total = QG.freeCount(tap, mode, "gesture_reader")
+        eq(free .. "/" .. total, "3/4", "gestures: free slots of a section in books")
+        free, total = QG.freeCount(tap, mode, "gesture_fm")
+        eq(free .. "/" .. total, "1/2", "gestures: the file browser counts only the slots it has")
+        free, total = QG.freeCount(tap, nil, "gesture_reader")
+        eq(free .. "/" .. total, "4/4", "gestures: no data means all free")
+    end
+    eq(QG.plan(nil, "quran_goto_ayah"), "free", "gestures: a free slot is assigned on a tap")
+    eq(QG.plan({ quran_goto_ayah = true }, "quran_goto_ayah"), "mine", "gestures: a slot of this action offers Remove")
+    eq(QG.plan({ toggle_bookmark = true }, "quran_goto_ayah"), "taken", "gestures: another action's slot asks first")
+    eq(QG.plan({ settings = {} }, "quran_goto_ayah"), "free", "gestures: settings alone do not take a slot")
+    eq(QG.holder({}, function() return "Toggle bookmark" end), "Toggle bookmark",
+        "gestures: the holder is named by KOReader's own words")
+    eq(QG.holder({}, function() error("x") end), "taken", "gestures: a holder that cannot be named is taken")
+    eq(QG.holder({}, nil), "taken", "gestures: no describer, still an answer")
+
+    local data = {
+        gesture_reader = {
+            multiswipe_west_east = { quran_goto_ayah = true },
+            tap_right_bottom_corner = { quran_goto_ayah = true, settings = { order = { "quran_goto_ayah" } } },
+            some_new_gesture = { quran_goto_ayah = true },
+            tap_top_right_corner = { toggle_bookmark = true },
+            hold_bottom_left_corner = { quran_old_action = true },
+        },
+        gesture_fm = {
+            tap_right_bottom_corner = { quran_goto_ayah = true },
+            short_diagonal_swipe = { quran_browser = true, quran_old_action = true },
+        },
+        custom_multiswipes = {},
+    }
+    do
+        local b = QG.bindingsFor(data, "quran_goto_ayah")
+        local parts = {}
+        for _i, x in ipairs(b) do parts[#parts + 1] = x.section:sub(9) .. ":" .. x.slot end
+        eq(table.concat(parts, " "),
+            "reader:tap_right_bottom_corner reader:multiswipe_west_east reader:some_new_gesture fm:tap_right_bottom_corner",
+            "gestures: bindings in a steady order (books first, corners before multiswipes, unknown last)")
+        eq(#QG.bindingsFor(data, "quran_surah_overview"), 0, "gestures: an unbound action has none")
+        eq(#QG.bindingsFor(nil, "quran_goto_ayah"), 0, "gestures: no data, no bindings")
+    end
+    eq(QG.bindingsText(data, "quran_goto_ayah"),
+        "Tap bottom-right corner (in books and in the file browser), Multiswipe \226\172\133 \226\158\161 (in books), some new gesture (in books)",
+        "gestures: a gesture held in both modes is named once")
+    eq(QG.bindingsText(data, "quran_browser"), "Short diagonal swipe (in the file browser)",
+        "gestures: one binding in words")
+    eq(QG.bindingsText(data, "quran_surah_overview"), nil, "gestures: no binding, no words")
+    do
+        local known = {}
+        for _i, act in ipairs(QG.ACTIONS) do known[act.id] = true end
+        eq(table.concat(QG.boundIds(data, "quran_", known), ","), "quran_old_action",
+            "gestures: a gesture left on an action that no longer exists is found once")
+        eq(#QG.boundIds(nil, "quran_", known), 0, "gestures: no data, no leftovers")
+    end
+
+    -- the actions mirror the plugin's registrations
+    do
+        local reg = {}
+        package.loaded["dispatcher"].registerAction = function(_, name, opts) reg[name] = opts end
+        dofile(PLUGIN_DIR .. "/quran_actions.lua").registerDispatcherActions()
+        package.loaded["dispatcher"].registerAction = function() end
+        local n_reg, listed = 0, {}
+        for _name in pairs(reg) do n_reg = n_reg + 1 end
+        local wrong = {}
+        for _i, act in ipairs(QG.ACTIONS) do
+            listed[act.id] = true
+            local r = reg[act.id]
+            if not r then
+                wrong[#wrong + 1] = act.id .. " is not registered"
+            elseif (r.general == true) ~= (act.fm == true) or act.reader ~= true then
+                wrong[#wrong + 1] = act.id .. " has another reach"
+            end
+            if type(act.title) ~= "string" or act.title == "" then wrong[#wrong + 1] = act.id .. " has no title" end
+        end
+        for name in pairs(reg) do
+            if not listed[name] then wrong[#wrong + 1] = name .. " is missing from the screen" end
+        end
+        eq(table.concat(wrong, "; "), "", "gestures: the screen lists exactly the registered actions, with their reach")
+        eq(#QG.ACTIONS, n_reg, "gestures: as many rows as registered actions")
+    end
+
+    -- the one-tap offer
+    do
+        local s = QG.suggestion({ gesture_reader = {}, gesture_fm = {} })
+        eq(#s, 2, "gestures-offer: a free corner in both modes offers both")
+        eq(s[1].section .. ":" .. s[1].slot .. ":" .. s[1].action,
+            "gesture_reader:tap_right_bottom_corner:quran_quick_panel",
+            "gestures-offer: the quick panel on the bottom-right corner tap, books first")
+        s = QG.suggestion({ gesture_reader = {},
+            gesture_fm = { tap_right_bottom_corner = { koassistant_ai_settings = true } } })
+        eq(#s, 1, "gestures-offer: a corner taken in the file browser is left alone there")
+        eq(s[1].section, "gesture_reader", "gestures-offer: only the free mode is offered")
+        s = QG.suggestion({
+            gesture_reader = { tap_right_bottom_corner = { koassistant_quick_actions = true } },
+            gesture_fm = { tap_right_bottom_corner = { koassistant_ai_settings = true } } })
+        eq(#s, 0, "gestures-offer: a corner taken in both modes offers nothing")
+        eq(#QG.suggestion(data), 0, "gestures-offer: once an action has a gesture the offer is gone")
+        eq(#QG.suggestion(nil), 2, "gestures-offer: no data counts as free")
+    end
+
+    -- the writes
+    local flushed = 0
+    local function plugin(live_data, mode)
+        local settings = { data = live_data, flush = function() flushed = flushed + 1 end }
+        local ges = { settings = settings, ges_mode = mode or "gesture_reader",
+                      gestures = live_data[mode or "gesture_reader"] }
+        return { ui = { gestures = ges } }, ges
+    end
+    do
+        local d = { gesture_reader = { tap_top_right_corner = { toggle_bookmark = true, other = true } } }
+        local q, ges = plugin(d)
+        local got, live = QG.access(q)
+        eq(got == d and live == ges, true, "gestures-write: the live Gestures plugin's data is used")
+        eq(QG.ready(d), true, "gestures-write: data with a section is ready")
+        eq(QG.ready({}), false, "gestures-write: empty data is not ready")
+        eq(QG.assign(q, "gesture_reader", "tap_top_right_corner", "quran_goto_ayah"), "live",
+            "gestures-write: a live write applies at once")
+        eq(d.gesture_reader.tap_top_right_corner.quran_goto_ayah, true, "gestures-write: the action is bound")
+        eq(d.gesture_reader.tap_top_right_corner.toggle_bookmark, nil,
+            "gestures-write: the slot's other actions are removed (one action per gesture here)")
+        eq(flushed, 1, "gestures-write: written to disk")
+        eq(QG.assign(q, "gesture_fm", "short_diagonal_swipe", "quran_browser"), "live",
+            "gestures-write: the other mode can be written from here")
+        eq(d.gesture_fm.short_diagonal_swipe.quran_browser, true, "gestures-write: a missing mode table is made")
+        do
+            -- a mode that had no table yet: the live Gestures plugin
+            -- reads its actions from a table it holds, so it must be
+            -- handed the new one
+            local d2 = {}
+            local q2, ges2 = plugin(d2)
+            eq(ges2.gestures, nil, "gestures-write: (a Gestures plugin with no table for its mode)")
+            QG.assign(q2, "gesture_reader", "pinch_gesture", "quran_browser")
+            eq(ges2.gestures ~= nil and ges2.gestures == d2.gesture_reader, true,
+                "gestures-write: a mode table made fresh is handed to the live Gestures plugin")
+        end
+        eq(QG.boundCount(q), 2, "gestures-write: two actions have a gesture")
+        local removed
+        package.loaded["dispatcher"]._removeFromOrder = function(sec, slot, id)
+            removed = slot .. ":" .. id .. ":" .. tostring(sec == d.gesture_reader)
+        end
+        eq(QG.remove(q, "gesture_reader", "tap_top_right_corner", "quran_goto_ayah"), "live",
+            "gestures-write: a live removal applies at once")
+        eq(removed, "tap_top_right_corner:quran_goto_ayah:true",
+            "gestures-write: KOReader's own order list is trimmed")
+        package.loaded["dispatcher"]._removeFromOrder = nil
+        eq(d.gesture_reader.tap_top_right_corner, nil,
+            "gestures-write: an emptied slot goes back to unset, so the tap falls through again")
+        d.gesture_reader.rotate_cw = { quran_goto_ayah = true, toggle_bookmark = true }
+        QG.remove(q, "gesture_reader", "rotate_cw", "quran_goto_ayah")
+        eq(d.gesture_reader.rotate_cw.toggle_bookmark, true, "gestures-write: another action on the slot is kept")
+        eq(QG.remove(q, "gesture_reader", "pinch_gesture", "quran_goto_ayah"), "live",
+            "gestures-write: removing from an unset slot is harmless")
+    end
+    do
+        -- KOReader's Gestures plugin not loaded: the file is written, for the next start
+        local saved_ls = package.loaded["luasettings"]
+        local file_flushed, opened = 0, nil
+        local store = { data = { gesture_reader = {} }, flush = function() file_flushed = file_flushed + 1 end }
+        package.loaded["luasettings"] = { open = function(_, path) opened = path; return store end }
+        local q = { ui = {} }
+        eq(QG.assign(q, "gesture_reader", "pinch_gesture", "quran_browser"), "restart",
+            "gestures-write: without the live plugin a write needs a restart")
+        eq(opened ~= nil and opened:find("/gestures.lua", 1, true) ~= nil, true,
+            "gestures-write: KOReader's own gestures file is the target")
+        eq(store.data.gesture_reader.pinch_gesture.quran_browser, true, "gestures-write: the file data is changed")
+        eq(file_flushed, 1, "gestures-write: and saved")
+        eq(QG.remove(q, "gesture_reader", "pinch_gesture", "quran_browser"), "restart",
+            "gestures-write: a removal needs a restart there too")
+        package.loaded["luasettings"] = saved_ls
+    end
+
+    -- the screens, with stand-in dialogs
+    local UIMg = require("ui/uimanager")
+    local saved_show, saved_close = UIMg.show, UIMg.close
+    local stack = {}
+    UIMg.show = function(_, w) stack[#stack + 1] = w end
+    UIMg.close = function(_, w)
+        for i = #stack, 1, -1 do
+            if stack[i] == w then table.remove(stack, i) end
+        end
+    end
+    local function top() return stack[#stack] end
+    local function rows(dialog)
+        local t = {}
+        for _i, row in ipairs(dialog.buttons or {}) do
+            t[#t + 1] = (row[1].enabled == false and "[off] " or "") .. row[1].text
+        end
+        return t
+    end
+    local function tapRow(dialog, pattern)
+        for _i, row in ipairs(dialog.buttons) do
+            if row[1].text:find(pattern, 1, true) then return row[1].callback() end
+        end
+        error("FAIL gestures-screen: no row with " .. pattern)
+    end
+    local saved_grs = G_reader_settings
+    G_reader_settings = { isTrue = function() return false end, nilOrTrue = function() return true end }
+    package.loaded["dispatcher"].menuTextFunc = function() return "Toggle bookmark" end
+    do
+        local d = { gesture_reader = { tap_top_right_corner = { toggle_bookmark = true } }, gesture_fm = {} }
+        local q = plugin(d)
+        local left = 0
+        QG.showScreen(q, function() left = left + 1 end)
+        local r = rows(top())
+        eq(top().title:find("Changes apply at once", 1, true) ~= nil, true,
+            "gestures-screen: says that changes apply at once")
+        eq(r[1], "Quick start: Tap bottom-right corner opens the quick panel",
+            "gestures-screen: a fresh install gets the one-tap offer")
+        eq(r[2], "Quick panel: not set", "gestures-screen: an action without a gesture says so")
+        eq(#r, 1 + #QG.ACTIONS + 1, "gestures-screen: the offer, one row per action, Close")
+        tapRow(top(), "Quick start")
+        eq(d.gesture_reader.tap_right_bottom_corner.quran_quick_panel, true,
+            "gestures-screen: the offer binds the quick panel in books")
+        eq(d.gesture_fm.tap_right_bottom_corner.quran_quick_panel, true,
+            "gestures-screen: and in the file browser")
+        r = rows(top())
+        eq(r[1], "Quick panel: Tap bottom-right corner (in books and in the file browser)",
+            "gestures-screen: the screen comes back showing the new gesture, the offer gone")
+        -- one action's own dialog
+        tapRow(top(), "Go to ayah")
+        r = rows(top())
+        eq(top().title, "Gestures for: Go to ayah", "gestures-action: titled with the action")
+        eq(table.concat(r, " | "),
+            "Add a gesture (in books)\226\128\166 | Add a gesture (in the file browser)\226\128\166 | Back",
+            "gestures-action: an action that works in both modes can get a gesture in each")
+        -- the picker: sections
+        tapRow(top(), "Add a gesture (in books)")
+        r = rows(top())
+        eq(r[1], "Tap corner: 2 of 4 free", "gestures-picker: free slots are counted per section")
+        eq(r[4], "[off] Double tap (off in KOReader's gesture settings)",
+            "gestures-picker: a section KOReader has switched off cannot be opened")
+        eq(r[#r - 1], "[off] Multiswipes (off in KOReader's gesture settings)",
+            "gestures-picker: multiswipes off by default")
+        eq(top().title:find("Go to ayah (in books)", 1, true) ~= nil, true,
+            "gestures-picker: the title names the action and the mode")
+        -- the picker: slots, a taken one asks first
+        tapRow(top(), "Tap corner")
+        r = rows(top())
+        eq(table.concat(r, " | "),
+            "Tap top-left corner | Tap top-right corner: Toggle bookmark | Tap bottom-left corner"
+            .. " | Tap bottom-right corner: Toggle bookmark | Back",
+            "gestures-picker: a slot in use shows what holds it")
+        tapRow(top(), "Tap top-right corner")
+        eq(top().ok_text, "Replace", "gestures-picker: a taken slot asks before it is replaced")
+        eq(d.gesture_reader.tap_top_right_corner.toggle_bookmark, true,
+            "gestures-picker: nothing changes before the answer")
+        top().cancel_callback()
+        eq(rows(top())[1], "Tap corner: 2 of 4 free", "gestures-picker: saying no goes back to the sections")
+        tapRow(top(), "Tap corner")
+        tapRow(top(), "Tap top-left corner")
+        eq(d.gesture_reader.tap_top_left_corner.quran_goto_ayah, true,
+            "gestures-picker: a tap on a free slot assigns it")
+        eq(stack[#stack - 1].text, "Gesture assigned: Tap top-left corner", "gestures-picker: and says so")
+        eq(rows(top())[2], "Go to ayah: Tap top-left corner (in books)",
+            "gestures-picker: the screen comes back with the new gesture")
+        -- the same slot again: this action's own slot offers Remove
+        tapRow(top(), "Go to ayah")
+        eq(rows(top())[1], "Remove: Tap top-left corner (in books)",
+            "gestures-action: a bound gesture gets a Remove row")
+        tapRow(top(), "Add a gesture (in books)")
+        tapRow(top(), "Tap corner")
+        eq(rows(top())[1], "Tap top-left corner (this one)", "gestures-picker: this action's own slot is marked")
+        tapRow(top(), "(this one)")
+        eq(top().ok_text, "Remove", "gestures-picker: a tap on it offers Remove")
+        top().ok_callback()
+        eq(d.gesture_reader.tap_top_left_corner, nil, "gestures-picker: Remove unbinds it")
+        -- the file browser picker: reader-only slots and sections drop out
+        while #stack > 0 do stack[#stack] = nil end
+        QG.show({ quran = q, action_id = "quran_goto_ayah", action_label = "Go to ayah",
+                  section_key = "gesture_fm" })
+        r = rows(top())
+        eq(r[1], "Tap corner: 1 of 2 free", "gestures-picker: the file browser has two corner taps")
+        eq(r[4], "[off] Double tap (only in books)", "gestures-picker: double taps are for books")
+        tapRow(top(), "Tap corner")
+        eq(table.concat(rows(top()), " | "),
+            "Tap bottom-left corner | Tap bottom-right corner: Toggle bookmark | Back",
+            "gestures-picker: reader-only slots are not offered in the file browser")
+        -- callbacks run once
+        while #stack > 0 do stack[#stack] = nil end
+        local done_n, cancel_n = 0, 0
+        QG.show({ quran = q, action_id = "quran_browser", action_label = "Explorer",
+                  section_key = "gesture_reader",
+                  on_done = function() done_n = done_n + 1 end,
+                  on_cancel = function() cancel_n = cancel_n + 1 end })
+        local first = top()
+        tapRow(first, "Cancel")
+        first.tap_close_callback()
+        eq(cancel_n, 1, "gestures-picker: cancel is reported once")
+        eq(done_n, 0, "gestures-picker: and nothing is reported as done")
+        -- a leftover of an older plugin gets a row to remove it
+        while #stack > 0 do stack[#stack] = nil end
+        d.gesture_reader.rotate_ccw = { quran_old_action = true }
+        QG.showScreen(q)
+        r = rows(top())
+        eq(r[#r - 1], "An action that no longer exists: Rotate counterclockwise (in books)",
+            "gestures-screen: a gesture left on a gone action is listed")
+        tapRow(top(), "An action that no longer exists")
+        eq(table.concat(rows(top()), " | "), "Remove: Rotate counterclockwise (in books) | Back",
+            "gestures-action: it can only be removed")
+        tapRow(top(), "Remove")
+        eq(d.gesture_reader.rotate_ccw, nil, "gestures-action: and Remove clears it")
+        -- Close reports back to the Setup menu
+        while #stack > 0 do stack[#stack] = nil end
+        QG.showScreen(q, function() left = left + 1 end)
+        tapRow(top(), "Close")
+        eq(left, 1, "gestures-screen: closing the screen reports back")
+        -- no gesture data at all: point at KOReader's own screen
+        while #stack > 0 do stack[#stack] = nil end
+        QG.showScreen(plugin({}))
+        eq(top().text:find("Taps and gestures", 1, true) ~= nil, true,
+            "gestures-screen: without KOReader's gesture data the reader is sent to KOReader's own screen")
+    end
+    package.loaded["dispatcher"].menuTextFunc = nil
+    G_reader_settings = saved_grs
+    UIMg.show, UIMg.close = saved_show, saved_close
+end
+
 print("ALL HELPER TESTS PASS")

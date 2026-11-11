@@ -60,6 +60,17 @@ The EPUBs themselves (and manual asset ZIPs, as a fallback) live on the
 One KOReader setting the plugin needs for footer juz' display:
 Status bar → Status bar items → check **External content**.
 
+**Setup** (Top Menu → Tool icon → Quran → Setup) looks after two things:
+
+- **The book's own style and fonts.** A Quran book needs KOReader's
+  "Embedded Style" and "Embedded Fonts" switched on. If they are off when
+  you first open one (some readers make "off" their default), the plugin
+  switches both on for that book and tells you. It does this once per
+  book and never changes your defaults; switch them off again and it
+  stays off.
+- **Gestures.** Give the quick panel, go to ayah, the Explorer and the
+  other actions a gesture, or remove one, without leaving the plugin.
+
 ## Feedback
 
 Beta feedback is what this phase is for. Please

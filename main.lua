@@ -1270,6 +1270,12 @@ function Quran:init()
     -- Persistent settings
     self.settings = LuaSettings:open(DataStorage:getSettingsDir() .. "/quran.lua")
 
+    -- The book style guard, before KOReader reads this book's settings
+    -- (quran_setup.lua says why it cannot wait for DocSettingsLoad)
+    if self.ui.document and self.ui.doc_settings then
+        self:onDocSettingsLoad(self.ui.doc_settings, self.ui.document)
+    end
+
     -- Status-bar content function (closure captures self). Registered for
     -- every Quran book; returns the assembled enabled items, or nil when
     -- none are on (juz/hizb/rub'/surah are independent footer toggles, so
@@ -1449,6 +1455,29 @@ function Quran:_actionsModule()
         end
     end
     return self._actions_mod or nil
+end
+
+--- Lazy-load the setup module (book style guard, Setup menu, gestures).
+function Quran:_setupModule()
+    if self._setup_mod == nil then
+        local ok, mod = pcall(dofile, (self.path or "") .. "/quran_setup.lua")
+        self._setup_mod = (ok and type(mod) == "table") and mod or false
+        if not self._setup_mod then
+            logger.info("quran.koplugin: quran_setup.lua unavailable:", tostring(mod))
+        end
+    end
+    return self._setup_mod or nil
+end
+
+--- Before a book is loaded: the style guard may fix the book's own
+--- settings (quran_setup.lua), so its first page is drawn correctly.
+--- Called from init and, as a second chance, by KOReader's event.
+function Quran:onDocSettingsLoad(doc_settings, document)
+    local setup = self:_setupModule()
+    if not setup then return end
+    -- a fault in the guard must never keep a book from opening
+    local ok, err = pcall(setup.beforeLoad, self, doc_settings, document)
+    if not ok then logger.info("quran.koplugin: style guard failed before loading:", tostring(err)) end
 end
 
 --- Lazy-load the root explorer module (Lane extract queries + screens).
@@ -2074,6 +2103,20 @@ function Quran:onReaderReady()
     logger.dbg("quran.koplugin: onReaderReady — view:", self.ui.view and "yes" or "nil",
                 "crelistener:", self.ui.crelistener and "yes" or "nil",
                 "quran_book:", self._is_quran_book and "yes" or "no")
+
+    -- Setup checks: the book style guard (quran_setup.lua). When it has
+    -- to open the book again, the rest of this start-up (the pending
+    -- go-to, the restore offer) belongs to that new opening, not to this
+    -- one, which is about to be closed.
+    local setup = self:_setupModule()
+    if setup then
+        local ok, res = pcall(setup.onReaderReady, self)
+        if not ok then
+            logger.info("quran.koplugin: style guard failed after loading:", tostring(res))
+        elseif res == "reopening" then
+            return
+        end
+    end
 
     -- Remember the last Quran book actually opened (DETECTED, not
     -- guessed by filename) — openBookAt's zero-setup fallback and the
@@ -5839,6 +5882,10 @@ function Quran:addToMainMenu(menu_items)
             },
         },
     }
+    -- Setup (quran_setup.lua): the book style check and the gestures screen
+    local setup = self:_setupModule()
+    local setup_ok, setup_row = pcall(function() return setup and setup.menuItem(self) end)
+    if setup_ok and setup_row then table.insert(menu_items.quran.sub_item_table, setup_row) end
     -- D-R3-19: bookless (FileManager) shape — drop the book-scoped
     -- panel row; everything else works without a book (the browser is
     -- the entry, Library & assets the natural landing)

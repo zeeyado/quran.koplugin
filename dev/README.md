@@ -29,8 +29,8 @@ Path resolution (all auto-detected, override via env):
 | `QURAN_EBOOK_DIR` | `../quran-ebook` | `data/*.sqlite` + `output/` build artifacts for the real-db round trips (skip when absent) |
 | `KOREADER_DIR` | `/Applications/KOReader.app/Contents/koreader` | sqlite binding + CREngine for the real-document tests (skip when absent) |
 
-Full run on the reference setup: 1890 tests (2026-11-10). Stock-luajit
-run without KOReader/data: 1366 tests + skips, still authoritative for
+Full run on the reference setup: 2203 tests (2026-11-11). Stock-luajit
+run without KOReader/data: 1664 tests + skips, still authoritative for
 everything that ran.
 
 CI (`.github/workflows/check.yml`) parse-checks every Lua file and runs
@@ -74,13 +74,35 @@ relative path silently opens the file manager); the first run of a fresh
 KO_HOME shows a one-time color-rendering popup: run twice and use the
 second shot.
 
-## Shared knowledge
+## In-app check of the book style guard (macOS)
 
-This plugin is one of five Quran projects kept side by side on the
-maintainer's machine. Their shared map (who owns which data and tools,
-the shared formats, lessons learned) is a local file:
-`~/adm/projects/quran-explorer/docs/quran_projects_map.md`. The working
-rules for this repo are in quran-ebook's `CLAUDE.md`.
+The style guard (`quran_setup.lua`) depends on the order in which KOReader
+opens a book, which the harness can only imitate. This script runs the
+real thing:
+
+```zsh
+dev/check_guard_in_app.sh            # about three and a half minutes
+```
+
+It starts the installed KOReader eleven times with throwaway profiles,
+with no window, on copies of two sample books of the sister repo
+(`../quran-ebook/tests/`; pass two EPUBs to use others), and checks the
+log line that `dev/patches/2-quran-guard.lua` writes: a new book fixed
+before loading, a silent second opening, a manual "off" respected, the
+fix after loading with its single reopen, a waiting go-to that survives
+that reopen, the guard's own switch, a book saved as off fixed from its
+metadata, another book untouched, stock defaults only remembered. It
+must end `ALL GUARD RUNS PASS`. Your real KOReader profile is never read
+or written.
+
+Plugin order matters and the script covers both orders. KOReader calls
+plugins in the order of their folder paths, and its own `docsettingtweak`
+plugin answers the `DocSettingsLoad` event and stops it there. On Kobo and
+Kindle this plugin sits in KOReader's own `plugins/` folder and comes
+after it, so the event never arrives; on macOS and Android the path is
+absolute and comes first. That is why the guard also runs from the
+plugin's `init`. Most runs use a plugin path that sorts like the e-reader
+case; one uses the desktop order.
 
 ## Release / packaging
 
